@@ -1,6 +1,14 @@
 export const TOKEN_KEY = "msf_token";
 export const REFRESH_TOKEN_KEY = "msf_refresh_token";
 const PERSISTENT_LOGIN_ANNOUNCEMENT_KEY = /^msf-login-announcement:[^:]+:hidden$/;
+const PERSISTENT_APPEARANCE_KEYS = new Set([
+  "msf-theme",
+  "msf-language",
+  "msf-glass-scene",
+  "msf-glass-quality",
+  "msf-content-plate-settings",
+  "msf-content-plate-opacity",
+]);
 
 export interface ApiErrorPayload {
   error?: string;
@@ -48,9 +56,12 @@ export function clearSession() {
     for (let index = 0; index < storage.length; index += 1) {
       const key = storage.key(index);
       if (!key || !key.toLowerCase().startsWith("msf")) continue;
+      const normalizedKey = key.toLowerCase();
       const isPermanentAnnouncementPreference =
-        storage === window.localStorage && PERSISTENT_LOGIN_ANNOUNCEMENT_KEY.test(key.toLowerCase());
-      if (!isPermanentAnnouncementPreference) keys.push(key);
+        storage === window.localStorage && PERSISTENT_LOGIN_ANNOUNCEMENT_KEY.test(normalizedKey);
+      const isPersistentAppearancePreference =
+        storage === window.localStorage && PERSISTENT_APPEARANCE_KEYS.has(normalizedKey);
+      if (!isPermanentAnnouncementPreference && !isPersistentAppearancePreference) keys.push(key);
     }
     keys.forEach((key) => storage.removeItem(key));
   }

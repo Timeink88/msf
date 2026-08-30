@@ -57,7 +57,7 @@ describe("api timeout", () => {
 });
 
 describe("clearSession", () => {
-  it("preserves permanent login announcement dismissal while clearing auth and session state", () => {
+  it("preserves appearance and permanent announcement preferences while clearing auth and session state", () => {
     const localStorage = new MemoryStorage();
     const sessionStorage = new MemoryStorage();
     Object.defineProperty(globalThis, "window", {
@@ -70,6 +70,12 @@ describe("clearSession", () => {
     localStorage.setItem(TOKEN_KEY, "access-token");
     localStorage.setItem(REFRESH_TOKEN_KEY, "refresh-token");
     localStorage.setItem(hiddenKey, "1");
+    localStorage.setItem("msf-theme", "dark");
+    localStorage.setItem("msf-language", "zh-CN");
+    localStorage.setItem("msf-glass-scene", "static");
+    localStorage.setItem("msf-glass-quality", "reduced");
+    localStorage.setItem("msf-content-plate-settings", JSON.stringify({ subtle: 40, regular: 50, strong: 60 }));
+    localStorage.setItem("msf-dashboard-settings", "private-user-layout");
     sessionStorage.setItem(sessionKey, "1");
 
     clearSession();
@@ -77,6 +83,12 @@ describe("clearSession", () => {
     expect(localStorage.getItem(TOKEN_KEY)).toBeNull();
     expect(localStorage.getItem(REFRESH_TOKEN_KEY)).toBeNull();
     expect(localStorage.getItem(hiddenKey)).toBe("1");
+    expect(localStorage.getItem("msf-theme")).toBe("dark");
+    expect(localStorage.getItem("msf-language")).toBe("zh-CN");
+    expect(localStorage.getItem("msf-glass-scene")).toBe("static");
+    expect(localStorage.getItem("msf-glass-quality")).toBe("reduced");
+    expect(localStorage.getItem("msf-content-plate-settings")).toBe(JSON.stringify({ subtle: 40, regular: 50, strong: 60 }));
+    expect(localStorage.getItem("msf-dashboard-settings")).toBeNull();
     expect(sessionStorage.getItem(sessionKey)).toBeNull();
   });
 });

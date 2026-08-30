@@ -14,6 +14,9 @@ describe("appearance initialization contract", () => {
     expect(main).toContain('savedQuality === "full" || savedQuality === "reduced" ? savedQuality : "balanced"');
     expect(settings).toContain('useState<GlassQuality>("balanced")');
     expect(settings).toContain('storedQuality === "full" || storedQuality === "reduced" ? storedQuality : "balanced"');
+    expect(login).toContain("normalizeGlassQuality(root.dataset.garyQuality)");
+    expect(login).toContain("maxRenderPixels={qualityProfile.pixels}");
+    expect(login).toContain("maxDpr={qualityProfile.dpr}");
   });
 
   it("uses the complete v0.4.7.x scene on both the app shell and login", () => {

@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import GradientWaves from "@/components/react-bits/GradientWaves";
+import { GLASS_QUALITY_PROFILES, normalizeGlassQuality } from "@/lib/glass-quality";
 
 const WAVE_PALETTES = {
   light: {
@@ -15,7 +16,6 @@ const WAVE_PALETTES = {
 } as const;
 
 type SceneMode = "dynamic" | "static" | "neutral";
-type QualityMode = "full" | "balanced" | "reduced";
 type ScenePerformanceProfile = "default" | "proxy-dense";
 
 function readBackdropState() {
@@ -27,7 +27,7 @@ function readBackdropState() {
   return {
     dark: root.classList.contains("dark"),
     scene: (rawScene === "static" || rawScene === "neutral" ? rawScene : "dynamic") as SceneMode,
-    quality: (rawQuality === "balanced" || rawQuality === "reduced" ? rawQuality : "full") as QualityMode,
+    quality: normalizeGlassQuality(rawQuality),
     performanceProfile: (rawPerformanceProfile === "proxy-dense" ? rawPerformanceProfile : "default") as ScenePerformanceProfile,
     reducedMotion: window.matchMedia("(prefers-reduced-motion: reduce)").matches,
   };
@@ -57,11 +57,7 @@ export function SceneBackdrop() {
 
   const palette = state.dark ? WAVE_PALETTES.dark : WAVE_PALETTES.light;
   const animated = state.scene === "dynamic" && !state.reducedMotion;
-  const qualityProfile = state.quality === "reduced"
-    ? { speed: 0.12, detail: "low" as const, pixels: 650_000, proxyPixels: 500_000, dpr: 0.75 }
-    : state.quality === "balanced"
-      ? { speed: 0.16, detail: "low" as const, pixels: 1_200_000, proxyPixels: 900_000, dpr: 1 }
-      : { speed: 0.2, detail: "medium" as const, pixels: 2_300_000, proxyPixels: 1_200_000, dpr: 1.5 };
+  const qualityProfile = GLASS_QUALITY_PROFILES[state.quality];
   const visible = state.scene !== "neutral";
   const proxyDense = state.performanceProfile === "proxy-dense";
 

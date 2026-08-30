@@ -21,6 +21,7 @@ import GlassSurface from "@/components/react-bits/GlassSurface";
 import GradientWaves from "@/components/react-bits/GradientWaves";
 import { api, apiData } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
+import { GLASS_QUALITY_PROFILES, normalizeGlassQuality } from "@/lib/glass-quality";
 
 import "./login.css";
 
@@ -75,15 +76,19 @@ export default function LoginPage() {
   const [sceneMode, setSceneMode] = useState(() =>
     typeof document !== "undefined" ? document.documentElement.dataset.garyScene || "dynamic" : "dynamic"
   );
+  const [qualityMode, setQualityMode] = useState(() =>
+    normalizeGlassQuality(typeof document !== "undefined" ? document.documentElement.dataset.garyQuality : undefined)
+  );
 
   useEffect(() => {
     const root = document.documentElement;
     const syncAppearance = () => {
       setIsDarkTheme(root.classList.contains("dark"));
       setSceneMode(root.dataset.garyScene || "dynamic");
+      setQualityMode(normalizeGlassQuality(root.dataset.garyQuality));
     };
     const observer = new MutationObserver(syncAppearance);
-    observer.observe(root, { attributes: true, attributeFilter: ["class", "data-gary-scene"] });
+    observer.observe(root, { attributes: true, attributeFilter: ["class", "data-gary-scene", "data-gary-quality"] });
     syncAppearance();
     return () => observer.disconnect();
   }, []);
@@ -124,6 +129,7 @@ export default function LoginPage() {
 
   const passwordToggleLabel = showPassword ? "隐藏密码" : "显示密码";
   const wavePalette = isDarkTheme ? loginWavePalettes.dark : loginWavePalettes.light;
+  const qualityProfile = GLASS_QUALITY_PROFILES[qualityMode];
 
   const closeAnnouncementForSession = () => {
     try {
@@ -149,12 +155,12 @@ export default function LoginPage() {
         <SceneBackdrop />
       ) : (
         <GradientWaves
-          key={isDarkTheme ? "dark" : "light"}
+          key={`${isDarkTheme ? "dark" : "light"}-${qualityMode}`}
           className="msf-login-gradient-waves"
           horizonColor={wavePalette.horizon}
           waveColor={wavePalette.wave}
           crestColor={wavePalette.crest}
-          speed={sceneMode === "static" ? 0 : 0.34}
+          speed={sceneMode === "static" ? 0 : qualityProfile.speed}
           amplitude={3.4}
           waveScale={0.72}
           waveRatio={0.9}
@@ -164,13 +170,16 @@ export default function LoginPage() {
           zoom={1}
           height={5.5}
           fogDepth={48}
-          detail="medium"
+          detail={qualityProfile.detail}
           brightness={1}
           opacity={1}
-          mouseInteraction={sceneMode === "dynamic"}
-          parallaxStrength={0.28}
-          grain
+          mouseInteraction={sceneMode === "dynamic" && qualityMode === "full"}
+          parallaxStrength={qualityMode === "full" ? 0.28 : 0}
+          grain={qualityMode === "full"}
           grainIntensity={0.015}
+          maxRenderPixels={qualityProfile.pixels}
+          maxDpr={qualityProfile.dpr}
+          powerPreference="high-performance"
         />
       )}
       <GlassFilterDefs />
