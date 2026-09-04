@@ -135,6 +135,12 @@ func insertSetupRow(t *testing.T, app *App, coreType string, amd64v3 bool, accel
 		now, now, "root", "", "Asia/Shanghai", "7777", amd64v3, "eth0", "", coreType, true, "127.0.0.1", "223.5.5.5", false, "28.0.0.0/8", "f2b0::/18", "nft", "direct_default", "mihomo", true, "", "", false, "", "", "", acceleratorURL != "", acceleratorURL, true); err != nil {
 		t.Fatal(err)
 	}
+	// A configured accelerator URL means "manual" semantics: the pinned
+	// endpoint is used verbatim instead of the auto-probe pool (which would
+	// reach the real internet from unit tests).
+	if acceleratorURL != "" {
+		app.setSetting(settingAcceleratorMode, "manual")
+	}
 }
 
 func smartReleaseForPlatform(commit, digest string) githubRelease {
@@ -296,6 +302,9 @@ func TestMihomoCoreSwitchCachesLegacyCurrentBinary(t *testing.T) {
 }
 
 func TestComponentDownloadUsesRunningMihomoWhenNoExplicitProxy(t *testing.T) {
+	// Isolate from any accelerator state left by other tests: with an empty
+	// pool and no probed winner, routing falls through to the proxy line.
+	withTestAcceleratorPool(t)
 	app := newTestApp(t)
 	writeInstalledMihomoBinary(t, app, "test-mihomo")
 	if err := app.writeTextFile(mihomoActiveConfigRelPath, "mixed-port: 17892\n"); err != nil {
@@ -321,8 +330,8 @@ func TestComponentDownloadUsesRunningMihomoWhenNoExplicitProxy(t *testing.T) {
 		t.Fatalf("download proxy = %v, want local Mihomo mixed port", proxyURL)
 	}
 	const official = "https://github.com/vernesong/mihomo/releases/download/Prerelease-Alpha/test.gz"
-	if got := app.githubDownloadRouteURL(official); got != official {
-		t.Fatalf("running Mihomo route = %q, want official GitHub URL", got)
+	if got := app.githubDownloadRoute(official); got.URL != official || got.Direct {
+		t.Fatalf("no-mirror route = %#v, want official GitHub URL on the proxy line", got)
 	}
 }
 
@@ -356,27 +365,71 @@ func TestMihomoCoreSwitchProgressUsesExistingComponentState(t *testing.T) {
 
 func TestMihomoCoreSwitchDownloadURLUsesVerifiedAcceleratorPath(t *testing.T) {
 	const raw = "https://github.com/vernesong/mihomo/releases/download/Prerelease-Alpha/mihomo-linux-amd64-v1-alpha-smart-deadbee.gz"
-	t.Run("default", func(t *testing.T) {
+	newProbePool := func(t *testing.T, handler http.HandlerFunc) string {
+		t.Helper()
+		server := httptest.NewServer(handler)
+		t.Cleanup(server.Close)
+		return server.URL
+	}
+	body := strings.Repeat("probe-body-", 40)
+
+	t.Run("default picks fastest live accelerator", func(t *testing.T) {
+		original := builtinGitHubAcceleratorPrefixes
+		slow := newProbePool(t, func(w http.ResponseWriter, r *http.Request) { time.Sleep(300 * time.Millisecond); w.Write([]byte(body)) })
+		fast := newProbePool(t, func(w http.ResponseWriter, r *http.Request) { w.Write([]byte(body)) })
+		resetAcceleratorManagerForTest(original)
+		t.Cleanup(func() { resetAcceleratorManagerForTest(original) })
+		builtinGitHubAcceleratorPrefixes = []string{slow, fast}
 		app := newTestApp(t)
-		if got := app.mihomoCoreSwitchDownloadURL(raw); got != defaultMihomoCoreSwitchAccelerator+raw {
-			t.Fatalf("default switch download URL = %q", got)
+		// bestGitHubAccelerator warms its cache in the background; prime it
+		// synchronously for a deterministic assertion.
+		snapshot := app.refreshAcceleratorSnapshot(context.Background())
+		if snapshot.Best != fast {
+			t.Fatalf("probe winner = %q, want fastest %q (results: %#v)", snapshot.Best, fast, snapshot.Results)
+		}
+		if got := app.githubDownloadRoute(raw); got.URL != fast+"/"+raw || !got.Direct {
+			t.Fatalf("default switch download route = %#v, want fastest accelerator %q direct", got, fast)
+		}
+	})
+	t.Run("dead accelerators fall back to official URL", func(t *testing.T) {
+		original := builtinGitHubAcceleratorPrefixes
+		dead := newProbePool(t, func(w http.ResponseWriter, r *http.Request) { http.Error(w, "gone", http.StatusBadGateway) })
+		resetAcceleratorManagerForTest(original)
+		t.Cleanup(func() { resetAcceleratorManagerForTest(original) })
+		builtinGitHubAcceleratorPrefixes = []string{dead}
+		app := newTestApp(t)
+		if snapshot := app.refreshAcceleratorSnapshot(context.Background()); snapshot.Best != "" {
+			t.Fatalf("all-dead pool winner = %q, want empty", snapshot.Best)
+		}
+		if got := app.githubDownloadRoute(raw); got.URL != raw || got.Direct {
+			t.Fatalf("all-dead pool should keep official URL on the proxy line, got %#v", got)
 		}
 	})
 	t.Run("configured accelerator", func(t *testing.T) {
+		original := builtinGitHubAcceleratorPrefixes
+		mirror := newProbePool(t, func(w http.ResponseWriter, r *http.Request) { w.Write([]byte(body)) })
+		resetAcceleratorManagerForTest(original)
+		t.Cleanup(func() { resetAcceleratorManagerForTest(original) })
+		builtinGitHubAcceleratorPrefixes = nil
 		app := newTestApp(t)
-		insertSetupRow(t, app, "meta", false, "https://mirror.example")
-		if got := app.mihomoCoreSwitchDownloadURL(raw); got != "https://mirror.example/"+raw {
-			t.Fatalf("configured switch download URL = %q", got)
+		insertSetupRow(t, app, "meta", false, mirror)
+		if got := app.githubDownloadRoute(raw); got.URL != mirror+"/"+raw || !got.Direct {
+			t.Fatalf("configured switch download route = %#v, want %q direct", got, mirror+"/"+raw)
 		}
 	})
 	t.Run("configured HTTP proxy keeps official URL", func(t *testing.T) {
+		original := builtinGitHubAcceleratorPrefixes
+		live := newProbePool(t, func(w http.ResponseWriter, r *http.Request) { w.Write([]byte(body)) })
+		resetAcceleratorManagerForTest(original)
+		t.Cleanup(func() { resetAcceleratorManagerForTest(original) })
+		builtinGitHubAcceleratorPrefixes = []string{live}
 		app := newTestApp(t)
 		insertSetupRow(t, app, "meta", false, "")
 		if _, err := app.DB.Exec(`update system_setups set github_proxy_enabled=true,github_http_proxy='http://127.0.0.1:18080'`); err != nil {
 			t.Fatal(err)
 		}
-		if got := app.mihomoCoreSwitchDownloadURL(raw); got != raw {
-			t.Fatalf("proxied switch download URL = %q, want official URL", got)
+		if got := app.githubDownloadRoute(raw); got.URL != raw || got.Direct {
+			t.Fatalf("explicit proxy must keep the official URL on the proxy line, got %#v", got)
 		}
 	})
 	t.Run("non GitHub URL is untouched", func(t *testing.T) {
@@ -386,6 +439,16 @@ func TestMihomoCoreSwitchDownloadURLUsesVerifiedAcceleratorPath(t *testing.T) {
 			t.Fatalf("non-GitHub URL = %q", got)
 		}
 	})
+}
+
+func TestGitHubAcceleratorPrefixOf(t *testing.T) {
+	const raw = "https://github.com/o/r/releases/download/v1/a.gz"
+	if got := acceleratorPrefixOf("https://ghfast.top/"+raw, raw); got != "https://ghfast.top" {
+		t.Fatalf("prefix extraction = %q", got)
+	}
+	if got := acceleratorPrefixOf(raw, raw); got != "" {
+		t.Fatalf("direct route should yield empty prefix, got %q", got)
+	}
 }
 
 func TestSmartMihomoAssetSelectionRejectsPackageFormats(t *testing.T) {

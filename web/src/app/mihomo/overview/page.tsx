@@ -9,6 +9,8 @@ import {
   Terminal,
   Zap,
   ChartColumn,
+  ExternalLink,
+  KeyRound,
 } from "lucide-react";
 import { AppShell } from "@/components/AppShell";
 import { PageHeader } from "@/components/layout/PageHeader";
@@ -221,6 +223,7 @@ function buildMihomoConfigFields(fullData: Record<string, any>, data: Record<str
     { label: "绑定地址", value: displayScalar(configField(configText, "bind-address")) },
     { label: "网口", value: displayScalar(configField(configText, "interface-name")) },
     { label: "控制器", value: controller },
+    { label: "控制器 Secret", value: configField(configText, "secret") ? "已启用（右上角可复制）" : "未设置" },
     { label: "IPv6", value: displayBoolean(configField(configText, "ipv6")) },
     { label: "路由标记", value: displayScalar(configField(configText, "routing-mark")) },
     { label: "进程查找", value: displayScalar(configField(configText, "find-process-mode")) },
@@ -371,6 +374,7 @@ function ConfigGrid({ items, columns = "grid-cols-2 sm:grid-cols-3 xl:grid-cols-
 export default function MihomoOverviewPage() {
   const [trafficHistory, setTrafficHistory] = useState<OverviewTrafficHistoryPoint[]>(makeInitialTrafficHistory);
   const [connectionHistory, setConnectionHistory] = useState<OverviewConnectionHistoryPoint[]>(makeInitialConnectionHistory);
+  const [secretCopied, setSecretCopied] = useState(false);
   const trafficStream = useMihomoTrafficStream();
   const overview = useApiPath<any>("/api/v1/mihomo/overview", [], 1000);
   const fullOverview = useApiPath<any>("/api/v1/mihomo/overview?full=1", [], 5000);
@@ -401,6 +405,17 @@ export default function MihomoOverviewPage() {
     () => buildMihomoConfigFields(fullData, data, configText),
     [fullData, data, configText]
   );
+  const controllerSecret = useMemo(() => (configField(configText, "secret") || "").trim(), [configText]);
+  const copyControllerSecret = async () => {
+    if (!controllerSecret) return;
+    try {
+      await navigator.clipboard.writeText(controllerSecret);
+      setSecretCopied(true);
+      window.setTimeout(() => setSecretCopied(false), 1500);
+    } catch {
+      /* clipboard unavailable */
+    }
+  };
   const domesticExit = exitInfo(networkData.ipip ?? networkData.domestic ?? networkData.china_exit);
   const internationalExit = exitInfo(networkData.ipsb ?? networkData.international ?? networkData.global_exit);
   const connectionPayload = apiData<any>(connectionsQuery.data, {});
@@ -461,6 +476,27 @@ export default function MihomoOverviewPage() {
                 <span className={(running ? "bg-emerald-500 animate-pulse" : "bg-gray-400") + " h-2 w-2 rounded-full"} />
                 {running ? "running" : "stopped"}
               </span>
+              <a
+                href="/ui/"
+                target="_blank"
+                rel="noreferrer"
+                className="inline-flex items-center gap-1.5 rounded-lg border border-border/60 px-2.5 py-1 text-xs font-medium text-muted-foreground transition hover:bg-muted/60 hover:text-foreground"
+                title="打开 zashboard 面板"
+              >
+                <ExternalLink className="h-3.5 w-3.5" />
+                zashboard
+              </a>
+              {controllerSecret ? (
+                <button
+                  type="button"
+                  onClick={() => void copyControllerSecret()}
+                  className="inline-flex items-center gap-1.5 rounded-lg border border-border/60 px-2.5 py-1 text-xs font-medium text-muted-foreground transition hover:bg-muted/60 hover:text-foreground"
+                  title="复制 mihomo 控制器 secret（zashboard 首次连接时输入一次即可）"
+                >
+                  <KeyRound className="h-3.5 w-3.5" />
+                  {secretCopied ? "已复制" : "复制 Secret"}
+                </button>
+              ) : null}
             </>
           )}
         />
