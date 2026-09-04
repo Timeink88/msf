@@ -2065,7 +2065,7 @@ export function SetupPage() {
                       description="使用 GitHub 加速镜像下载组件"
                       checked={form.github_accelerator_enabled}
                       onChange={(checked) => update("github_accelerator_enabled", checked)}
-                      >
+                    >
                         <div className="space-y-2 pl-0.5">
                         <input
                             className={cn(inputClass, "h-8 text-xs")}
@@ -2078,27 +2078,9 @@ export function SetupPage() {
                             value={form.github_accelerator_url}
                             onChange={(event) => update("github_accelerator_url", event.target.value)}
                         />
-                        <div className="flex flex-wrap gap-2 text-xs">
-                          {[
-                            ["Cloudflare", "https://gh-proxy.com"],
-                            ["Fastly CDN", "https://cdn.gh-proxy.com"],
-                            ["EdgeOne", "https://edgeone.gh-proxy.com"],
-                          ].map(([label, value]) => (
-                            <button
-                              key={value}
-                              type="button"
-                              onClick={() => update("github_accelerator_url", value)}
-                              className={cn(
-                                "rounded-md border px-2.5 py-1.5 transition",
-                                form.github_accelerator_url === value
-                                  ? "border-primary bg-primary/10 text-primary"
-                                  : "border-border bg-background text-muted-foreground hover:text-foreground"
-                              )}
-                            >
-                              {label}
-                            </button>
-                          ))}
-                        </div>
+                        <p className="text-[11px] leading-relaxed text-muted-foreground">
+                          此处为手动指定的加速地址；留空并勾选时将使用内置公共镜像自动测速选线（gh-proxy.com、ghfast.top 等），安装完成后可在 设置→系统→GitHub 加速镜像 中查看测速状态、管理镜像与配置 GitHub Token。
+                        </p>
                       </div>
                       </CheckOption>
                     </div>

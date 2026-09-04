@@ -10,6 +10,7 @@ import { GlassFilterDefs } from "@/components/liquid-glass/GlassFilterDefs";
 import { SceneBackdrop } from "@/components/liquid-glass/SceneBackdrop";
 import { cn } from "@/lib/utils";
 import { DiagnosticsDialog } from "@/components/system/DiagnosticsDialog";
+import { StartupIssuesBanner } from "@/components/system/StartupIssuesBanner";
 import { AssistantWidget } from "@/components/assistant/AssistantWidget";
 
 interface AppShellProps {
@@ -73,6 +74,7 @@ export function AppShell({
               : !contentUnderHeader && "py-4 md:pb-6 md:pt-0"
           )}
         >
+          <StartupIssuesBanner />
           {children}
         </div>
       </main>

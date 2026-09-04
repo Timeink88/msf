@@ -3,34 +3,37 @@ import { Navigate, Route, Routes, useLocation, useSearchParams } from "react-rou
 import { AlertCircle, Loader2, RefreshCw } from "lucide-react";
 import { useAuth } from "@/lib/auth";
 
-import HomePage from "@/app/page";
-import LoginPage from "@/app/login/page";
-import MosdnsPage from "@/app/mosdns/page";
-import MosdnsOverviewPage from "@/app/mosdns/overview/page";
-import MosdnsRulesPage from "@/app/mosdns/rules/page";
-import MosdnsClientsPage from "@/app/mosdns/clients/page";
-import MosdnsQueryLogPage from "@/app/mosdns/query-log/page";
-import MosdnsSystemPage from "@/app/mosdns/system/page";
-import MosdnsConfigPage from "@/app/mosdns/service-config/page";
-import MosdnsLogsPage from "@/app/mosdns/logs/page";
-import ProxyPage from "@/app/proxy/page";
-import MihomoPage from "@/app/mihomo/page";
-import MihomoOverviewPage from "@/app/mihomo/overview/page";
-import MihomoConnectionsPage from "@/app/mihomo/connections/page";
-import MihomoConfigPage from "@/app/mihomo/config/page";
-import MihomoLogsPage from "@/app/mihomo/logs/page";
-import ProcessPage from "@/app/process/page";
-import ConfigPage from "@/app/config/page";
-import LogsPage from "@/app/logs/page";
-import { SettingsClient } from "@/app/settings/SettingsClient";
-import { SetupPage } from "@/pages/SetupPage";
-import { SingBoxPage } from "@/pages/SingBoxPage";
-import { LiquidGlassLab } from "@/pages/LiquidGlassLab";
 import { SceneBackdrop } from "@/components/liquid-glass/SceneBackdrop";
 import { GlassSurface } from "@/components/liquid-glass/GlassSurface";
 
+// Route-level code splitting: the SPA used to ship as one ~3.1MB bundle that
+// stalled cold browser loads.  Every page now loads on demand; shared vendor
+// groups are split in vite.config.ts.  Named exports are adapted for lazy().
+const HomePage = lazy(() => import("@/app/page"));
+const LoginPage = lazy(() => import("@/app/login/page"));
+const MosdnsPage = lazy(() => import("@/app/mosdns/page"));
+const MosdnsOverviewPage = lazy(() => import("@/app/mosdns/overview/page"));
+const MosdnsRulesPage = lazy(() => import("@/app/mosdns/rules/page"));
+const MosdnsClientsPage = lazy(() => import("@/app/mosdns/clients/page"));
+const MosdnsQueryLogPage = lazy(() => import("@/app/mosdns/query-log/page"));
+const MosdnsSystemPage = lazy(() => import("@/app/mosdns/system/page"));
+const MosdnsConfigPage = lazy(() => import("@/app/mosdns/service-config/page"));
+const MosdnsLogsPage = lazy(() => import("@/app/mosdns/logs/page"));
+const ProxyPage = lazy(() => import("@/app/proxy/page"));
+const MihomoPage = lazy(() => import("@/app/mihomo/page"));
+const MihomoOverviewPage = lazy(() => import("@/app/mihomo/overview/page"));
 const MihomoProxiesPage = lazy(() => import("@/app/mihomo/proxies/page"));
 const MihomoRulesPage = lazy(() => import("@/app/mihomo/rules/page"));
+const MihomoConnectionsPage = lazy(() => import("@/app/mihomo/connections/page"));
+const MihomoConfigPage = lazy(() => import("@/app/mihomo/config/page"));
+const MihomoLogsPage = lazy(() => import("@/app/mihomo/logs/page"));
+const ProcessPage = lazy(() => import("@/app/process/page"));
+const ConfigPage = lazy(() => import("@/app/config/page"));
+const LogsPage = lazy(() => import("@/app/logs/page"));
+const SettingsClient = lazy(() => import("@/app/settings/SettingsClient").then((m) => ({ default: m.SettingsClient })));
+const SetupPage = lazy(() => import("@/pages/SetupPage").then((m) => ({ default: m.SetupPage })));
+const SingBoxPage = lazy(() => import("@/pages/SingBoxPage").then((m) => ({ default: m.SingBoxPage })));
+const LiquidGlassLab = lazy(() => import("@/pages/LiquidGlassLab").then((m) => ({ default: m.LiquidGlassLab })));
 
 function Splash() {
   return (
@@ -119,7 +122,11 @@ function SetupRoute() {
   if (initializationError || initialized === null) {
     return <InitializationFailure message={initializationError} onRetry={() => void refresh()} />;
   }
-  return <SetupPage />;
+  return (
+    <Suspense fallback={<Splash />}>
+      <SetupPage />
+    </Suspense>
+  );
 }
 
 function SettingsRoute() {
@@ -130,22 +137,12 @@ function SettingsRoute() {
 }
 
 function protectedRoute(element: React.ReactNode) {
-  return <RequireReady>{element}</RequireReady>;
-}
-
-function MihomoProxiesRoute() {
+  // Auth resolves first; the per-route lazy chunk then streams in behind the
+  // same Splash used for the initial load.
   return (
-    <Suspense fallback={<Splash />}>
-      <MihomoProxiesPage />
-    </Suspense>
-  );
-}
-
-function MihomoRulesRoute() {
-  return (
-    <Suspense fallback={<Splash />}>
-      <MihomoRulesPage />
-    </Suspense>
+    <RequireReady>
+      <Suspense fallback={<Splash />}>{element}</Suspense>
+    </RequireReady>
   );
 }
 
@@ -153,7 +150,16 @@ export function App() {
   return (
     <Routes>
       <Route path="/setup" element={<SetupRoute />} />
-      <Route path="/login" element={<PublicOnly><LoginPage /></PublicOnly>} />
+      <Route
+        path="/login"
+        element={
+          <PublicOnly>
+            <Suspense fallback={<Splash />}>
+              <LoginPage />
+            </Suspense>
+          </PublicOnly>
+        }
+      />
 
       <Route path="/" element={protectedRoute(<HomePage />)} />
       <Route path="/mosdns" element={protectedRoute(<MosdnsPage />)} />
@@ -178,8 +184,8 @@ export function App() {
 
       <Route path="/mihomo" element={protectedRoute(<MihomoPage />)} />
       <Route path="/mihomo/overview" element={protectedRoute(<MihomoOverviewPage />)} />
-      <Route path="/mihomo/proxies" element={protectedRoute(<MihomoProxiesRoute />)} />
-      <Route path="/mihomo/rules" element={protectedRoute(<MihomoRulesRoute />)} />
+      <Route path="/mihomo/proxies" element={protectedRoute(<MihomoProxiesPage />)} />
+      <Route path="/mihomo/rules" element={protectedRoute(<MihomoRulesPage />)} />
       <Route path="/mihomo/connections" element={protectedRoute(<MihomoConnectionsPage />)} />
       <Route path="/mihomo/config" element={protectedRoute(<MihomoConfigPage />)} />
       <Route path="/mihomo/logs" element={protectedRoute(<MihomoLogsPage />)} />
