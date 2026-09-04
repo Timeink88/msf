@@ -74,6 +74,10 @@ type App struct {
 	smartResourceMu         sync.RWMutex
 	smartResourceJobs       map[string]smartResourceState
 	smartResourceCancels    map[string]smartResourceCancelEntry
+	mihomoSecretValueMu     sync.RWMutex
+	mihomoSecretValue       string
+	gameUdpBypassMu         sync.RWMutex
+	gameUdpBypassValue      string
 }
 
 type assistantCancelEntry struct {
@@ -132,6 +136,9 @@ func New(opts Options) (*App, error) {
 		db.Close()
 		return nil, err
 	}
+	app.ensureMihomoControllerSecret()
+	app.ensureGameUDPBypassCache()
+	app.reconcileMihomoCoreTypeWithBinary()
 	app.cleanupAssistantRuntimeState()
 	_, _ = app.DB.Exec(`delete from settings where key='factory_reset.completed_id'`)
 	app.Services = NewServiceManager(app)
@@ -188,11 +195,22 @@ func (a *App) EnsureBaseLayout() error {
 	if err := a.ensureRuntimeLayout(); err != nil {
 		return err
 	}
-	return a.reconcileAppliedMihomoUserConfig()
+	// A reconcile failure means the persisted user config no longer passes
+	// validation (core type mismatch, missing Smart resources, ...).  The
+	// panel must still come up so the failure can be repaired from the UI;
+	// fatal-ing here turned into a systemd crash loop with no repair surface.
+	if err := a.reconcileAppliedMihomoUserConfig(); err != nil {
+		issue := a.startupIssueFromValidation(err.Error())
+		a.recordStartupIssue(issue.Code, issue.Title, issue.Message, issue.FixSteps)
+	}
+	// Backfill the controller secret for configs written before this
+	// hardening existed (deployments upgrading from <= v0.6.2).
+	a.ensureActiveMihomoControllerSecret()
+	return nil
 }
 
 func (a *App) Router() http.Handler {
-	return a.withCommonMiddleware(a.rawRouter())
+	return withResponseCompression(a.withCommonMiddleware(a.rawRouter()))
 }
 
 // rawRouter returns the route table without authentication middleware.  Public
@@ -392,6 +410,10 @@ func (a *App) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v1/system/diagnostics", a.handleDiagnostics)
 	mux.HandleFunc("POST /api/v1/system/diagnostics/run", a.handleDiagnosticsRun)
 	mux.HandleFunc("GET /api/v1/system/diagnostics/download", a.handleDiagnosticsDownload)
+	mux.HandleFunc("GET /api/v1/system/startup-issues", a.handleStartupIssues)
+	mux.HandleFunc("GET /api/v1/github/accelerators", a.handleGitHubAccelerators)
+	mux.HandleFunc("PUT /api/v1/github/accelerators", a.handleGitHubAccelerators)
+	mux.HandleFunc("POST /api/v1/github/accelerators/probe", a.handleGitHubAccelerators)
 	mux.HandleFunc("GET /api/v1/network/info", a.handleNetworkInfo)
 	a.registerNetworkRuntimeRoutes(mux)
 	mux.HandleFunc("POST /api/v1/network/apply", a.handleNFTApply)

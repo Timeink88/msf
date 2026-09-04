@@ -22,7 +22,28 @@ type ServiceManager struct {
 	app   *App
 	mu    sync.Mutex
 	procs map[string]*exec.Cmd
+	// restart bookkeeping: one auto-restart loop per service, plus how long
+	// the previous instance stayed alive so crash loops back off instead of
+	// spinning.
+	restartLoops map[string]bool
+	startedAt    map[string]time.Time
+	lastBackoff  map[string]time.Duration
+	// deliberateStop marks services being stopped on purpose (Stop/Restart/
+	// StopAll).  StopAll stops without flipping the persisted desired state,
+	// so the waiter cannot rely on "desired" alone to tell an accidental
+	// death from an intentional one.
+	deliberateStop map[string]bool
 }
+
+// autoRestart timing: wait before the first revival attempt, the ceiling for
+// exponential backoff, and the uptime a process must reach for its backoff to
+// reset (a process that survived this long and then died is a fresh incident,
+// not a crash loop).
+const (
+	autoRestartInitialBackoff = time.Second
+	autoRestartMaxBackoff     = time.Minute
+	autoRestartStableUptime   = 2 * time.Minute
+)
 
 var processProcRoot = "/proc"
 
@@ -44,7 +65,14 @@ type ServiceStatus struct {
 }
 
 func NewServiceManager(app *App) *ServiceManager {
-	return &ServiceManager{app: app, procs: map[string]*exec.Cmd{}}
+	return &ServiceManager{
+		app:            app,
+		procs:          map[string]*exec.Cmd{},
+		restartLoops:   map[string]bool{},
+		startedAt:      map[string]time.Time{},
+		lastBackoff:    map[string]time.Duration{},
+		deliberateStop: map[string]bool{},
+	}
 }
 
 func (sm *ServiceManager) List() []ServiceStatus {
@@ -128,20 +156,43 @@ func (sm *ServiceManager) Start(ctx context.Context, name string) (ServiceStatus
 		return sm.Status(name), err
 	}
 	sm.procs[name] = cmd
+	sm.startedAt[name] = time.Now()
 	_ = os.WriteFile(spec.PIDFile, []byte(strconv.Itoa(cmd.Process.Pid)), 0644)
+	startedAt := sm.startedAt[name]
 	waitDone := make(chan struct{})
 	go func() {
 		_ = cmd.Wait()
 		stdout.Close()
 		stderr.Close()
 		close(waitDone)
-		sm.mu.Lock()
-		if sm.procs[name] == cmd {
-			delete(sm.procs, name)
-		}
-		removePIDFileIfMatches(spec.PIDFile, cmd.Process.Pid)
-		sm.mu.Unlock()
-	}()
+	sm.mu.Lock()
+	if sm.procs[name] == cmd {
+		delete(sm.procs, name)
+	}
+	delete(sm.startedAt, name)
+	removePIDFileIfMatches(spec.PIDFile, cmd.Process.Pid)
+	// A death while the service is still desired (service.<name>.enabled)
+	// and not part of a deliberate stop is an accident: pkill, OOM, kernel
+	// panic of the child — revive it with backoff.  Stop/Restart/StopAll mark
+	// deliberateStop first (StopAll keeps the desired state "true" on
+	// purpose, so desired alone cannot make this call).  Backoff resets only
+	// after a process survived autoRestartStableUptime — quick successive
+	// deaths keep the escalated interval from the previous loop.
+	deliberate := sm.deliberateStop[name]
+	delete(sm.deliberateStop, name)
+	revive := !deliberate && sm.app.setting(serviceDesiredKey(name), "") == "true"
+	if !revive || time.Since(startedAt) >= autoRestartStableUptime {
+		sm.lastBackoff[name] = 0
+	}
+	alreadyLooping := sm.restartLoops[name]
+	if revive && !alreadyLooping {
+		sm.restartLoops[name] = true
+	}
+	sm.mu.Unlock()
+	if revive && !alreadyLooping {
+		go sm.autoRestartLoop(name)
+	}
+}()
 	timer := time.NewTimer(300 * time.Millisecond)
 	exitedDuringStartup := false
 	select {
@@ -159,6 +210,10 @@ func (sm *ServiceManager) Start(ctx context.Context, name string) (ServiceStatus
 	}
 	st := sm.Status(name)
 	if !exitedDuringStartup && st.Running {
+		// A successful start invalidates any lingering stop intent (e.g.
+		// StopAll of an already-dead process leaves one behind) so future
+		// accidental deaths still auto-revive.  Start holds sm.mu already.
+		delete(sm.deliberateStop, name)
 		sm.setDesired(name, true)
 		sm.app.afterServiceStart(name)
 		return st, nil
@@ -192,6 +247,10 @@ func (sm *ServiceManager) stop(ctx context.Context, name string, persistDesired 
 	if err != nil {
 		return sm.Status(name), err
 	}
+	// Mark the intent before signaling so the exit waiter treats the death
+	// as deliberate and never queues an auto-restart — even when the desired
+	// state intentionally stays "true" (StopAll / restart flows).
+	sm.deliberateStop[name] = true
 	pid := readPID(spec.PIDFile)
 	if pid <= 0 {
 		if persistDesired {
@@ -276,6 +335,53 @@ func (sm *ServiceManager) StartEnabled(ctx context.Context) []string {
 		}
 	}
 	return errs
+}
+
+// autoRestartLoop revives a service that died while still desired.  The
+// backoff starts from whatever the previous crash loop escalated to and
+// doubles on every failed revival attempt up to autoRestartMaxBackoff; it
+// resets once a process survives autoRestartStableUptime.  The loop exits as
+// soon as the service is no longer desired, is already running again (e.g.
+// a concurrent manual start), or a start succeeds.
+func (sm *ServiceManager) autoRestartLoop(name string) {
+	defer func() {
+		sm.mu.Lock()
+		delete(sm.restartLoops, name)
+		sm.mu.Unlock()
+	}()
+	sm.mu.Lock()
+	backoff := sm.lastBackoff[name]
+	if backoff < autoRestartInitialBackoff {
+		backoff = autoRestartInitialBackoff
+	}
+	sm.mu.Unlock()
+	for {
+		timer := time.NewTimer(backoff)
+		<-timer.C
+		if sm.app.setting(serviceDesiredKey(name), "") != "true" {
+			return
+		}
+		if sm.Status(name).Running {
+			return
+		}
+		if _, err := sm.Start(context.Background(), name); err == nil {
+			sm.app.LogInfo("server/process.go", "子服务意外退出后已自动重启", map[string]any{
+				"service": name, "waited": backoff.String(),
+			})
+			return
+		} else {
+			sm.app.LogError("server/process.go", "子服务自动重启失败，继续退避重试", map[string]any{
+				"service": name, "error": err.Error(), "next_wait": (backoff * 2).String(),
+			})
+		}
+		backoff *= 2
+		if backoff > autoRestartMaxBackoff {
+			backoff = autoRestartMaxBackoff
+		}
+		sm.mu.Lock()
+		sm.lastBackoff[name] = backoff
+		sm.mu.Unlock()
+	}
 }
 
 func (sm *ServiceManager) setDesired(name string, enabled bool) {
