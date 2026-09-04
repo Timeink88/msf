@@ -1936,7 +1936,7 @@ func TestMihomoConnectionsProxiesRulesAndClose(t *testing.T) {
 		t.Fatalf("connection close failed: status=%d body=%s", closeAll.Code, closeAll.Body.String())
 	}
 	proxies := requestJSON(t, app, http.MethodGet, "/api/v1/mihomo/proxies?search=proxy", token, nil)
-	if proxies.Code != http.StatusOK || !strings.Contains(proxies.Body.String(), `"name":"Proxy"`) || !strings.Contains(proxies.Body.String(), `"name":"proxy-a"`) || !strings.Contains(proxies.Body.String(), `"provider-name":"airport"`) || !strings.Contains(proxies.Body.String(), `"proxies":{"Proxy"`) || strings.Contains(proxies.Body.String(), `"proxy_list"`) || strings.Contains(proxies.Body.String(), `"raw":{"proxies"`) {
+	if proxies.Code != http.StatusOK || !strings.Contains(proxies.Body.String(), `"name":"Proxy"`) || !strings.Contains(proxies.Body.String(), `"name":"proxy-a"`) || !strings.Contains(proxies.Body.String(), `"provider-name":"airport"`) || !strings.Contains(proxies.Body.String(), `"proxies":{"Proxy"`) || !strings.Contains(proxies.Body.String(), `"proxy_list"`) || strings.Contains(proxies.Body.String(), `"raw":{"proxies"`) {
 		t.Fatalf("proxy list mismatch: status=%d body=%s", proxies.Code, proxies.Body.String())
 	}
 	selectProxy := requestJSON(t, app, http.MethodPut, "/api/v1/mihomo/proxies/Proxy", token, map[string]string{"name": "proxy-a"})

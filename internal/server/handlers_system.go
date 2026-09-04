@@ -787,6 +787,10 @@ func (a *App) handleSettingsAppearancePut(w http.ResponseWriter, r *http.Request
 		writeError(w, http.StatusBadRequest, "bad_request", err.Error())
 		return
 	}
+	if err := validateAppearancePatch(req); err != nil {
+		writeError(w, http.StatusBadRequest, "bad_request", err.Error())
+		return
+	}
 	updates := make(map[string]string, len(req))
 	for key, value := range req {
 		if key == "" {
@@ -820,6 +824,53 @@ const (
 	contentPlateOpacityLegacyKey  = "content_plate_opacity"
 )
 
+const appearanceCustomCSSMaxBytes = 64 * 1024
+
+var accentColorPattern = regexp.MustCompile(`^#[0-9a-fA-F]{6}$`)
+var skinTintPattern = regexp.MustCompile(`^\d{1,3}$`)
+
+// validateAppearancePatch guards enum and size budgets (skin, custom CSS,
+// accent color, atmosphere tint) before any appearance setting is written.
+func validateAppearancePatch(raw map[string]any) error {
+	if value, ok := raw["skin"]; ok {
+		skin, ok := value.(string)
+		if !ok || !oneOf(skin, "amber", "classic") {
+			return fmt.Errorf("skin must be one of amber, classic")
+		}
+	}
+	if value, ok := raw["custom_css"]; ok {
+		css, ok := value.(string)
+		if !ok || len(css) > appearanceCustomCSSMaxBytes {
+			return fmt.Errorf("custom_css must be a string of at most %d bytes", appearanceCustomCSSMaxBytes)
+		}
+	}
+	if value, ok := raw["accent_color"]; ok {
+		accent, ok := value.(string)
+		if !ok || (accent != "" && !accentColorPattern.MatchString(accent)) {
+			return fmt.Errorf("accent_color must be an #rrggbb hex string or empty")
+		}
+	}
+	if value, ok := raw["skin_tint"]; ok {
+		tint, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("skin_tint must be a string")
+		}
+		trimmed := strings.TrimSpace(tint)
+		if trimmed != "" {
+			valid := skinTintPattern.MatchString(trimmed)
+			if valid {
+				if degrees, err := strconv.Atoi(trimmed); err != nil || degrees > 360 {
+					valid = false
+				}
+			}
+			if !valid {
+				return fmt.Errorf("skin_tint must be empty or hue degrees 0-360")
+			}
+		}
+	}
+	return nil
+}
+
 var contentPlateOpacityIntegerPattern = regexp.MustCompile(`^[0-9]+$`)
 
 type contentPlateOpacityRange struct {
@@ -846,9 +897,12 @@ func (a *App) appearanceSettingsPayload() map[string]string {
 		"language":                    a.setting("appearance.language", a.setting("language", "zh-CN")),
 		"scene":                       a.setting("appearance.scene", a.setting("scene", "dynamic")),
 		"quality":                     a.setting("appearance.quality", a.setting("quality", "balanced")),
+		"skin":                        a.setting("appearance.skin", "amber"),
+		"custom_css":                  a.setting("appearance.custom_css", ""),
+		"accent_color":                a.setting("appearance.accent_color", ""),
+		"skin_tint":                   a.setting("appearance.skin_tint", ""),
 		"compact":                     a.setting("appearance.compact", "false"),
 		"menu_order":                  a.setting("appearance.menu_order", ""),
-		"accent_color":                a.setting("appearance.accent_color", ""),
 		contentPlateOpacitySubtleKey:  opacity[contentPlateOpacitySubtleKey],
 		contentPlateOpacityRegularKey: opacity[contentPlateOpacityRegularKey],
 		contentPlateOpacityStrongKey:  opacity[contentPlateOpacityStrongKey],
