@@ -1,10 +1,11 @@
 plugins:
 # 定义了一个带过期缓存的内部使用/外部使用的国内dns服务器
+# aliapi 对裸 IP 上游的查询会挂起至 entry 超时（隔离环境同配置可复现，
+# 冷查询 5 秒 SERVFAIL）；https 形式的 IP 直连 DoH 实测健康，故国内上游走 DoH。
   - tag: domestic
     type: aliapi
     args:
-      concurrent: 3
+      concurrent: 2
       upstreams:
-        - addr: "223.5.5.5"
-        - addr: "223.6.6.6"
-        - addr: "114.114.114.114"
+        - addr: "https://223.5.5.5/dns-query"
+        - addr: "https://223.6.6.6/dns-query"

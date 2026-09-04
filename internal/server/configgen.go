@@ -454,10 +454,13 @@ jwt:
 }
 
 func (a *App) renderMihomoYAML(cfg SetupConfig) string {
+	var content string
 	if template, ok := runtimeTemplateText("mihomo/config.yaml"); ok {
-		return renderMihomoTemplate(template, cfg)
+		content = renderMihomoTemplate(template, cfg)
+	} else {
+		content = renderMihomoFallbackYAML(cfg)
 	}
-	return renderMihomoFallbackYAML(cfg)
+	return a.injectMihomoControllerSecret(content)
 }
 
 func renderMihomoTemplate(template string, cfg SetupConfig) string {
@@ -478,7 +481,7 @@ func renderMihomoFallbackYAML(cfg SetupConfig) string {
 	tunYAML := renderMihomoTunYAML(cfg)
 	return fmt.Sprintf(`# msf generated Mihomo config
 mode: rule
-log-level: info
+log-level: warning
 unified-delay: true
 tcp-concurrent: true
 interface-name: %s
@@ -1018,13 +1021,18 @@ func (a *App) migrateLegacyMosDNSDomainRules() error {
 
 func addMosDNSRealAAAABypass(content string) string {
 	const marker = `      - matches:                            #web ui中选择泄露版（默认），用cache_all，否则用cache_all_noleak`
+	// The v6 data plane is off, so a real AAAA could only steer clients into
+	// direct connections bypassing the proxy. The original upstream fallback
+	// queried $sequence_google over direct UDP, which is blocked in censored
+	// networks and turned every AAAA into a 5s SERVFAIL. Answer empty
+	// immediately instead so clients fall back to the faked A record. When
+	// the v6 data plane is enabled this bypass is not injected at all and the
+	// switch6 "block AAAA" toggle alone decides AAAA handling.
 	const bypass = `
-      - matches:                            #IPv6 数据面关闭时显式返回真实 AAAA
+      - matches:                            #IPv6 数据面关闭时立刻返回空 AAAA（客户端回退 v4 fakeip）
         - "qtype 28"
         - switch6 'B'
-        exec:
-          - $sequence_google
-          - exit
+        exec: reject 0
 `
 	return strings.ReplaceAll(content, marker, strings.TrimPrefix(bypass, "\n")+marker)
 }
@@ -1059,6 +1067,12 @@ func (a *App) renderNetworkYAML(cfg SetupConfig) string {
 
 func (a *App) renderNFT(cfg SetupConfig) string {
 	ifaceSet := nftInterfaceSet(cfg.SelectedInterface)
+	// Domestic game UDP (miHoYo etc.) must not transit mihomo: its tunnel
+	// expires UDP sessions after a fixed 60s idle (mihomo tunnel.go
+	// udpTimeout), which shows up as periodic 30-40s game disconnects.
+	// China game traffic is direct anyway — bypass it at the kernel like
+	// DNS/NTP already are.  Ports are operator-tunable via this setting.
+	gameUDPBypass := a.gameUDPBypassPorts()
 	content := fmt.Sprintf(`#!/usr/sbin/nft -f
 table inet msf {
   set local_ipv4 {
@@ -1107,6 +1121,11 @@ table inet msf {
     elements = { %s }
   }
 
+  set game_udp_bypass {
+    type inet_service
+    elements = { %s }
+  }
+
   chain nat-prerouting {
     type nat hook prerouting priority dstnat; policy accept;
     fib daddr type { unspec, local, anycast, multicast } return
@@ -1136,6 +1155,7 @@ table inet msf {
     ip6 daddr @china_dns_ipv6 return
     udp dport { 123 } return
     udp dport { 53 } accept
+    udp dport @game_udp_bypass return
     meta l4proto udp meta mark set 1 tproxy to :7896 accept
   }
 
@@ -1147,6 +1167,7 @@ table inet msf {
     ip6 daddr @china_dns_ipv6 return
     udp dport { 123 } return
     udp dport { 53 } accept
+    udp dport @game_udp_bypass return
     meta mark set 1
   }
 
@@ -1162,7 +1183,7 @@ table inet msf {
     iifname { %s } meta l4proto udp ct direction original goto proxy-tproxy
   }
 }
-`, fakeIPv4RouteCIDR(cfg.FakeIPRangeV4), fakeIPv6RouteCIDR(cfg.FakeIPRangeV6), ifaceSet, ifaceSet)
+`, fakeIPv4RouteCIDR(cfg.FakeIPRangeV4), fakeIPv6RouteCIDR(cfg.FakeIPRangeV6), gameUDPBypass, ifaceSet, ifaceSet)
 	if cfg.EnableIPv6 {
 		return content
 	}
@@ -1198,6 +1219,49 @@ func removeNFTSetBlock(content, name string) string {
 		out = append(out, line)
 	}
 	return strings.Join(out, "")
+}
+
+// gameUDPBypassPorts renders the operator-tunable UDP bypass port set for
+// domestic games.  Defaults cover the miHoYo gateway ports (Genshin Impact /
+// Star Rail / ZZZ share 22101-22102); comma-separated 1-65535 values.
+// Reads the in-memory cache only: renderNFT runs inside factory-reset
+// transactions that hold the single sqlite connection, so this path must
+// never issue its own query (same constraint as the controller secret).
+func (a *App) gameUDPBypassPorts() string {
+	raw := a.cachedGameUDPBypassPorts()
+	ports := make([]string, 0, 8)
+	seen := map[int]bool{}
+	for _, field := range strings.FieldsFunc(raw, func(r rune) bool { return r == ',' || r == ' ' || r == ';' }) {
+		port, err := strconv.Atoi(strings.TrimSpace(field))
+		if err != nil || port < 1 || port > 65535 || seen[port] {
+			continue
+		}
+		seen[port] = true
+		ports = append(ports, strconv.Itoa(port))
+	}
+	if len(ports) == 0 {
+		ports = []string{"22101", "22102"}
+	}
+	sort.Strings(ports)
+	return strings.Join(ports, ", ")
+}
+
+func (a *App) setCachedGameUDPBypassPorts(value string) {
+	a.gameUdpBypassMu.Lock()
+	a.gameUdpBypassValue = value
+	a.gameUdpBypassMu.Unlock()
+}
+
+func (a *App) cachedGameUDPBypassPorts() string {
+	a.gameUdpBypassMu.RLock()
+	defer a.gameUdpBypassMu.RUnlock()
+	return a.gameUdpBypassValue
+}
+
+// ensureGameUDPBypassCache loads the setting once at startup, outside any
+// transaction.
+func (a *App) ensureGameUDPBypassCache() {
+	a.setCachedGameUDPBypassPorts(a.setting("network.game_udp_bypass_ports", ""))
 }
 
 func (a *App) ensureMosDNSRuleFiles() error {
