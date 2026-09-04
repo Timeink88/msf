@@ -2,6 +2,83 @@
 
 ## 未发布
 
+### 中文
+
+#### 外观与皮肤系统
+
+- 修复每次重启后外观被重置：登录 token 过期触发的会话清理不再连带删除主题/皮肤偏好，外观设置全量同步到后端 SQLite（重启/换浏览器/换设备均不丢）。
+- 新增皮肤系统：琥珀暖白与经典玻璃两套，与明暗模式独立；设置页新增品牌主色调色盘（预设色板+取色器实时预览）。
+- 调色工作台：主色全局化（侧栏/分段控件/图表五色/氛围光/文字选中色全部跟随主色）、氛围色相滑条、自定义 CSS 编辑器（模板一键填入、300ms 防抖实时预览、撤销预览）。
+
+#### GitHub 下载可靠性与 Token
+
+- 下载 GitHub 资源改为镜像优先路由，支持个人 Token 认证直连 GitHub（Token 不经公共镜像），下载失败自动换线路；面板新增加速器状态卡、Token 设置与限流提示。
+
+#### 性能优化（速赢包）
+
+- 静态资源缓存分级：带哈希的构建产物一年 immutable，固定名资源一小时，index.html 保持即时刷新——面板二次打开不再全量重下。
+- Mihomo 默认日志级别 info→warning（此前 info 级月均可写穿 1.2GB 磁盘）；msf 日志中 URL 的 token/secret 参数脱敏后再落盘；日志轮转按磁盘剩余空间自动分档；Go 运行时默认 512MiB 软内存上限（GOMEMLIMIT 环境变量可覆盖）。
+- 接口响应"别名复制"收尾：/mihomo/rules、/logs/{service}、/mosdns/logs 等接口去掉前端从不读取的重复字段，响应体积下降 47%-80%。
+
+#### DNS 稳定性
+
+- 根除 AAAA 五秒黑洞：IPv6 数据面关闭时 AAAA 查询立即返回空应答（原实现送国外 DNS 直连，被墙网络下每次等满 5 秒超时）。
+- 根除冷域名五秒黑洞：aliapi 插件对裸 IP 上游的查询会挂起至超时，国内上游改为 IP 直连 DoH；Windows 搜索域（*.lan/*.local）直接本地拒答，不再发送上游。
+- 修复本机 DNS 接管诊断误报：resolv.conf 指向本机 LAN 地址（旁路由常见）时不再误判为"未接管"。
+
+#### 运维基础设施
+
+- Smart 核心资源缺失或校验失败不再崩溃循环，面板提供分步修复指引；mihomo 进程异常退出自动退避重启。
+- mihomo external-controller 自动生成随机 secret（此前 9090 无认证暴露）；gzip 中间件（Content-Type 白名单，SSE/WebSocket 天然排除）；copytruncate 日志轮转；配置历史/审计日志/更新包保留清理；ExecStopPost 自动清理 nft 规则。
+- 详见仓库内 KNOWN_ISSUES.md 的完整问题清单。
+
+#### 升级注意事项
+
+- **Mihomo 控制器（:9090）默认启用随机 secret**：升级后直连 9090 的工具（zashboard 等）首次连接需要填一次 secret——面板「Mihomo 概览」右上角可复制；不需要认证的环境可在设置中清空 `mihomo_controller_secret` 后重启。
+- **Go 运行时默认 512MiB 软内存上限**：对内存充裕的宿主机无感（软限可超，不会 OOM）；Docker/K8s 部署可通过容器的 `GOMEMLIMIT` 环境变量自行调整或置 -1 关闭。
+- **MosDNS 国内上游默认改为阿里 IP 直连 DoH**：aliapi 插件对裸 IP 上游存在挂起问题，DoH 形式更稳；如需改回可在面板 DNS 上游设置中编辑。
+
+### English
+
+#### Appearance & skin system
+
+- Fixed preferences being wiped on every restart: session cleanup triggered by token expiry no longer deletes appearance keys; appearance settings now fully synced to backend SQLite.
+- Skin system: Amber (warm-white glass) and Classic glass skins, independent of light/dark mode; brand accent color picker with live preview.
+- Color studio: globalized accent (sidebar/segments/chart palette/atmosphere/selection follow the accent), atmosphere hue slider, custom CSS editor with template fill, debounced live preview and undo.
+
+#### GitHub download reliability & tokens
+
+- Mirror-first routing for GitHub assets with optional personal token auth (tokens never traverse public mirrors); automatic line switching on failure; accelerator status card, token setup and rate-limit hints in the panel.
+
+#### Performance quick wins
+
+- Tiered static caching: immutable for hashed bundles, one hour for fixed-name assets, index.html always fresh.
+- Mihomo default log level info→warning; token/secret query params redacted from msf logs; log rotation tiered by free disk space; default 512MiB soft GOMEMLIMIT (env overridable).
+- Dropped never-read response mirrors on /mihomo/rules, /logs/{service}, /mosdns/logs etc. (47%-80% smaller payloads).
+
+#### DNS stability
+
+- Killed the AAAA 5s black hole: with the IPv6 data plane off, AAAA is answered empty immediately instead of querying foreign DNS over blocked direct UDP.
+- Killed the cold-domain 5s black hole: the aliapi plugin hangs on bare-IP upstreams, domestic upstreams moved to IP-direct DoH; Windows search-suffix queries (*.lan/*.local) are rejected locally.
+- Fixed a local DNS-takeover diagnostic false positive when resolv.conf points at the host's own LAN address.
+
+#### Operations infrastructure
+
+- Smart core resources missing or failing verification no longer crash-loop; the panel offers step-by-step recovery, and mihomo restarts with backoff after abnormal exits.
+- Auto-generated random secret for the mihomo external controller; gzip middleware (Content-Type allowlist, SSE/WebSocket excluded); copytruncate log rotation; retention pruning for config history/audit logs/update packages; ExecStopPost nft cleanup. See KNOWN_ISSUES.md for the full list.
+
+#### Upgrade notes
+
+- The mihomo external controller (:9090) now defaults to a generated
+  random secret; tools connecting directly (zashboard etc.) need it
+  once — copy it from the Mihomo overview page, or clear
+  `mihomo_controller_secret` and restart to disable auth.
+- A default 512MiB soft GOMEMLIMIT applies; override or disable (-1)
+  via the GOMEMLIMIT environment variable (Docker/K8s friendly).
+- MosDNS domestic upstreams default to Ali IP-direct DoH (the aliapi
+  plugin hangs on bare-IP upstreams); editable in the DNS upstream
+  settings.
+
 ## v0.6.3 - 2026-09-06
 
 ### 中文
@@ -23,7 +100,6 @@
 - Added viewport-aware content skipping and batched rendering for Mihomo proxy nodes so large lists perform less layout, paint, and React work at once.
 - Deferred Overview chart initialization near the viewport, debounced and deprioritized connection-topology updates, and batched connection-history rows to keep live refreshes interactive.
 - Preserved login appearance, scene, and user-selected dynamic-background settings, with Dynamic scene + Balanced quality as the default.
-
 ## v0.6.2 - 2026-08-29
 
 ### 中文
