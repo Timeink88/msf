@@ -1454,22 +1454,89 @@ func (a *App) fetchGitHubJSON(rawURL string, dst any) error {
 }
 
 func (a *App) fetchGitHubJSONContext(ctx context.Context, rawURL string, dst any) error {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, a.githubDownloadRouteURL(rawURL), nil)
+	// A tokened request must never transit a public accelerator mirror: the
+	// Bearer credential would be handed to a third party.  With a token the
+	// 5000/h quota also makes mirror rotation unnecessary.
+	if token := a.githubToken(); token != "" {
+		return friendlyGitHubAPIError(a.fetchGitHubJSONOnce(ctx, rawURL, false, token, dst, "token"))
+	}
+	first := a.githubDownloadRoute(rawURL)
+	firstPrefix := acceleratorPrefixOf(first.URL, rawURL)
+	via := "proxy"
+	if firstPrefix != "" {
+		via = "mirror"
+	}
+	err := a.fetchGitHubJSONOnce(ctx, first.URL, first.Direct, "", dst, via)
+	if err == nil {
+		return nil
+	}
+	if !isGitHubDownloadURL(rawURL) {
+		return friendlyGitHubAPIError(err)
+	}
+	// Rotate mirrors first — a different mirror egress IP carries its own
+	// anonymous 60/h quota, so switching actually helps on 403 — then fall
+	// back to the raw URL on the proxy/direct line.
+	if firstPrefix != "" {
+		markAcceleratorFailure(firstPrefix)
+		if next := a.nextAcceleratorPrefix(ctx, firstPrefix); next != "" {
+			if err2 := a.fetchGitHubJSONOnce(ctx, next+"/"+rawURL, true, "", dst, "mirror"); err2 == nil {
+				return nil
+			}
+		}
+		if err2 := a.fetchGitHubJSONOnce(ctx, rawURL, false, "", dst, "proxy"); err2 == nil {
+			return nil
+		}
+		return friendlyGitHubAPIError(err)
+	}
+	// The first attempt already went proxy/direct and failed: try the mirror
+	// line once before giving up.
+	if next := a.nextAcceleratorPrefix(ctx, ""); next != "" {
+		if err2 := a.fetchGitHubJSONOnce(ctx, next+"/"+rawURL, true, "", dst, "mirror"); err2 == nil {
+			return nil
+		}
+	}
+	return friendlyGitHubAPIError(err)
+}
+
+func (a *App) fetchGitHubJSONOnce(ctx context.Context, finalURL string, direct bool, token string, dst any, via string) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, finalURL, nil)
 	if err != nil {
 		return err
 	}
 	req.Header.Set("Accept", "application/vnd.github+json")
 	req.Header.Set("User-Agent", "msf/"+a.Version)
-	resp, err := a.downloadHTTPClient().Do(req)
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
+	resp, err := a.downloadHTTPClientFor(githubRoute{URL: finalURL, Direct: direct}).Do(req)
 	if err != nil {
 		return err
 	}
 	defer resp.Body.Close()
+	lastGitHubRateLimit.record(resp, via)
 	if resp.StatusCode >= 300 {
 		b, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
 		return fmt.Errorf("github api %s: %s", resp.Status, strings.TrimSpace(string(b)))
 	}
 	return json.NewDecoder(resp.Body).Decode(dst)
+}
+
+// friendlyGitHubAPIError turns anonymous quota rejections into an actionable
+// hint pointing at the token setting, keeping the original message for
+// diagnosis.
+func friendlyGitHubAPIError(err error) error {
+	if err == nil {
+		return nil
+	}
+	msg := err.Error()
+	lower := strings.ToLower(msg)
+	switch {
+	case strings.Contains(msg, "401") && strings.Contains(lower, "bad credentials"):
+		return fmt.Errorf("GitHub Token 无效或已过期（401），请在 设置→初始化配置→GitHub 加速 重新配置: %s", msg)
+	case (strings.Contains(msg, "403") || strings.Contains(msg, "429")) && strings.Contains(lower, "rate limit"):
+		return fmt.Errorf("GitHub API 匿名限流（未认证每 IP 60 次/小时，已自动切换线路仍被拒）。可在 设置→初始化配置→GitHub 加速 配置 Personal Access Token（提升至 5000 次/小时）: %s", msg)
+	}
+	return err
 }
 
 func releaseAssetURL(release githubRelease, contains, suffix string) string {
@@ -1989,10 +2056,9 @@ func (a *App) resolveMihomoCoreCandidate(ctx context.Context, coreType string, e
 		return mihomoCoreCandidate{}, err
 	}
 	tmp := filepath.Join(a.DataDir, "data", "mihomo-"+coreType+"-switch.download")
-	downloadURL := a.mihomoCoreSwitchDownloadURL(asset.URL)
 	_ = os.Remove(tmp)
 	defer os.Remove(tmp)
-	if _, err := a.downloadVerifiedResolvedURLContext(ctx, downloadURL, asset.Digest, tmp, emit); err != nil {
+	if _, err := a.downloadVerifiedFileContext(ctx, asset.URL, asset.Digest, tmp, emit); err != nil {
 		return mihomoCoreCandidate{}, fmt.Errorf("download %s core: %w", coreType, err)
 	}
 	extractDir, err := os.MkdirTemp(filepath.Join(a.DataDir, "data"), "mihomo-"+coreType+"-switch-*")
@@ -2008,7 +2074,7 @@ func (a *App) resolveMihomoCoreCandidate(ctx context.Context, coreType string, e
 	candidate := mihomoCoreCandidate{
 		Binary:             binaryPath,
 		ExtractDir:         extractDir,
-		AssetURL:           downloadURL,
+		AssetURL:           asset.URL,
 		AssetName:          asset.Name,
 		Digest:             asset.Digest,
 		VerificationSource: componentVerificationSourceGitHubAssetDigest,
