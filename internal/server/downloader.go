@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -31,7 +32,6 @@ type DownloadEvent struct {
 const (
 	componentVerificationSourceGitHubAssetDigest = "github_release_asset_digest"
 	componentVerificationSourceLocalUpload       = "local-upload"
-	defaultMihomoCoreSwitchAccelerator           = "https://gh-proxy.com/"
 )
 
 type componentDownloadAsset struct {
@@ -270,6 +270,49 @@ func (a *App) persistMihomoCoreType(coreType string) error {
 	return err
 }
 
+// reconcileMihomoCoreTypeWithBinary treats the installed Mihomo binary as the
+// source of truth for the persisted core type.  v0.6.1 could write
+// mihomo_core_type back to "meta" while a Smart binary stayed installed, and
+// the startup validation then rejected every Smart config with a fatal error.
+// Detection runs `mihomo -v`; the vernesong Smart builds identify themselves
+// with "smart" in the version banner.  Any failure to execute the binary
+// (missing, wrong platform, timeout) leaves the persisted value untouched.
+func (a *App) reconcileMihomoCoreTypeWithBinary() {
+	binary := a.currentMihomoBinaryPath()
+	info, err := os.Stat(binary)
+	if err != nil || info.IsDir() {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	output, runErr := exec.CommandContext(ctx, binary, "-v").CombinedOutput()
+	if runErr != nil || ctx.Err() != nil {
+		return
+	}
+	detected := "meta"
+	if strings.Contains(strings.ToLower(string(output)), "smart") {
+		detected = "smart"
+	}
+	persisted := a.selectedMihomoCoreType()
+	if persisted == detected {
+		return
+	}
+	if err := a.persistMihomoCoreType(detected); err != nil {
+		a.LogError("server/downloader.go", "Mihomo 核心类型对账写入数据库失败", map[string]any{"error": err.Error(), "detected": detected})
+		return
+	}
+	a.LogInfo("server/downloader.go", "Mihomo 核心类型与二进制不一致，已按二进制自检结果纠正", map[string]any{
+		"persisted": persistedLabel(persisted), "detected": detected, "binary": binary,
+	})
+}
+
+func persistedLabel(value string) string {
+	if strings.TrimSpace(value) == "" {
+		return "(空)"
+	}
+	return value
+}
+
 // componentDownloadAssetForCoreType resolves and returns the download asset for a
 // specific Mihomo core type (meta|smart). Ordinary component update/check call
 // componentDownloadAsset, which follows the active selected core; the switch
@@ -444,15 +487,19 @@ func (a *App) downloadFile(rawURL, dest string, emit func(DownloadEvent)) error 
 }
 
 func (a *App) downloadFileContext(ctx context.Context, rawURL, dest string, emit func(DownloadEvent)) error {
-	return a.downloadResolvedURLContext(ctx, a.githubDownloadRouteURL(rawURL), dest, emit)
+	return a.downloadResolvedRouteContext(ctx, a.githubDownloadRoute(rawURL), dest, emit)
 }
 
 func (a *App) downloadResolvedURLContext(ctx context.Context, finalURL, dest string, emit func(DownloadEvent)) error {
+	return a.downloadResolvedRouteContext(ctx, githubRoute{URL: finalURL}, dest, emit)
+}
+
+func (a *App) downloadResolvedRouteContext(ctx context.Context, route githubRoute, dest string, emit func(DownloadEvent)) error {
 	if err := os.MkdirAll(filepath.Dir(dest), 0755); err != nil {
 		return err
 	}
-	client := a.downloadHTTPClient()
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, finalURL, nil)
+	client := a.downloadHTTPClientFor(route)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, route.URL, nil)
 	if err != nil {
 		return err
 	}
@@ -507,15 +554,75 @@ func (a *App) downloadVerifiedFile(rawURL, expectedDigest, dest string, emit fun
 }
 
 func (a *App) downloadVerifiedFileContext(ctx context.Context, rawURL, expectedDigest, dest string, emit func(DownloadEvent)) (string, error) {
-	return a.downloadVerifiedResolvedURLContext(ctx, a.githubDownloadRouteURL(rawURL), expectedDigest, dest, emit)
+	first := a.githubDownloadRoute(rawURL)
+	digest, err := a.downloadVerifiedRouteContext(ctx, first, expectedDigest, dest, emit)
+	if err == nil || !isGitHubDownloadURL(rawURL) {
+		return digest, err
+	}
+	// GitHub download failed on the chosen route (dead accelerator, or the
+	// proxy path itself is broken).  Invalidate the loser and walk the
+	// fallback queue before giving up — incident B died exactly here.
+	if prefix := acceleratorPrefixOf(first.URL, rawURL); prefix != "" {
+		markAcceleratorFailure(prefix)
+	}
+	for _, retry := range a.githubFallbackRoutes(ctx, rawURL, first) {
+		if emit != nil {
+			emit(DownloadEvent{Status: "running", Message: "下载路由失败，切换线路重试: " + retry.URL})
+		}
+		if d, err2 := a.downloadVerifiedRouteContext(ctx, retry, expectedDigest, dest, emit); err2 == nil {
+			return d, nil
+		}
+	}
+	return digest, err
+}
+
+// githubFallbackRoutes builds the retry queue after a failed route: the
+// runner-up accelerator (direct) first, then the raw GitHub URL on the
+// proxy/direct line.  Already-tried URLs are skipped; ctx is honoured so a
+// cancelled download never blocks on a synchronous probe round.
+func (a *App) githubFallbackRoutes(ctx context.Context, raw string, failed githubRoute) []githubRoute {
+	if a.acceleratorMode() == "off" || ctx.Err() != nil {
+		return nil
+	}
+	seen := map[string]bool{failed.URL: true}
+	routes := []githubRoute{}
+	if prefix := a.manualAcceleratorPrefix(); prefix != "" {
+		if u := prefix + "/" + raw; !seen[u] {
+			routes = append(routes, githubRoute{URL: u, Direct: true})
+			seen[u] = true
+		}
+	} else if prefix := a.refreshAcceleratorSnapshot(ctx).Best; prefix != "" {
+		if u := prefix + "/" + raw; !seen[u] {
+			routes = append(routes, githubRoute{URL: u, Direct: true})
+			seen[u] = true
+		}
+	}
+	if !seen[raw] {
+		routes = append(routes, githubRoute{URL: raw})
+	}
+	return routes
+}
+
+// acceleratorPrefixOf extracts the accelerator prefix from a routed URL, or
+// "" when the URL went direct/proxied.
+func acceleratorPrefixOf(routed, raw string) string {
+	trimmed := strings.TrimSuffix(routed, raw)
+	if trimmed != "" && strings.HasSuffix(trimmed, "/") && (strings.HasPrefix(trimmed, "https://") || strings.HasPrefix(trimmed, "http://")) {
+		return strings.TrimSuffix(trimmed, "/")
+	}
+	return ""
 }
 
 func (a *App) downloadVerifiedResolvedURLContext(ctx context.Context, finalURL, expectedDigest, dest string, emit func(DownloadEvent)) (string, error) {
+	return a.downloadVerifiedRouteContext(ctx, githubRoute{URL: finalURL}, expectedDigest, dest, emit)
+}
+
+func (a *App) downloadVerifiedRouteContext(ctx context.Context, route githubRoute, expectedDigest, dest string, emit func(DownloadEvent)) (string, error) {
 	expected, err := canonicalSHA256Digest(expectedDigest)
 	if err != nil {
-		return "", fmt.Errorf("download %s requires a valid SHA-256 digest: %w", finalURL, err)
+		return "", fmt.Errorf("download %s requires a valid SHA-256 digest: %w", route.URL, err)
 	}
-	if err := a.downloadResolvedURLContext(ctx, finalURL, dest, emit); err != nil {
+	if err := a.downloadResolvedRouteContext(ctx, route, dest, emit); err != nil {
 		return "", err
 	}
 	actual, err := verifySHA256File(dest, expected)
@@ -523,10 +630,6 @@ func (a *App) downloadVerifiedResolvedURLContext(ctx context.Context, finalURL, 
 		return actual, err
 	}
 	return actual, nil
-}
-
-func (a *App) mihomoCoreSwitchDownloadURL(rawURL string) string {
-	return a.githubDownloadRouteURL(rawURL)
 }
 
 func verifySHA256File(path, expectedDigest string) (string, error) {
@@ -567,8 +670,16 @@ func (a *App) DownloadFile(rawURL, dest string, emit func(DownloadEvent)) error 
 }
 
 func (a *App) downloadHTTPClient() *http.Client {
+	return a.downloadHTTPClientFor(githubRoute{})
+}
+
+// downloadHTTPClientFor builds the HTTP client for a resolved route.
+// Accelerator routes go Direct: a domestic mirror must not detour through
+// the proxy egress — that would waste the acceleration and couple the
+// mirror's availability to the proxy's.
+func (a *App) downloadHTTPClientFor(route githubRoute) *http.Client {
 	transport := http.DefaultTransport.(*http.Transport).Clone()
-	if a != nil && a.DB != nil {
+	if !route.Direct && a != nil && a.DB != nil {
 		proxy := a.downloadProxyURL()
 		if proxy == nil {
 			proxy = a.runningMihomoDownloadProxyURL()
@@ -619,17 +730,34 @@ func (a *App) downloadProxyURL() *url.URL {
 	return u
 }
 
+// githubRoute is a resolved GitHub route: the final URL plus whether the
+// HTTP client must bypass proxies. Accelerator mirrors are domestic and are
+// always fetched Direct.
+type githubRoute struct {
+	URL    string
+	Direct bool
+}
+
+// githubDownloadRoute resolves the routing order for a GitHub URL.
+// Operator-intent first: an explicit download proxy wins over everything.
+// Otherwise the probed accelerator mirror comes BEFORE the running Mihomo
+// data plane (mirror-first policy) and goes direct; when no mirror is live,
+// traffic falls back to the proxy/direct line against GitHub itself.
+func (a *App) githubDownloadRoute(raw string) githubRoute {
+	if a == nil || a.DB == nil || !isGitHubDownloadURL(raw) {
+		return githubRoute{URL: raw}
+	}
+	if a.downloadProxyURL() != nil {
+		return githubRoute{URL: raw}
+	}
+	if prefix := a.bestGitHubAccelerator(); prefix != "" {
+		return githubRoute{URL: prefix + "/" + raw, Direct: true}
+	}
+	return githubRoute{URL: raw}
+}
+
 func (a *App) githubDownloadRouteURL(raw string) string {
-	if rewritten := a.rewriteDownloadURL(raw); rewritten != raw {
-		return rewritten
-	}
-	if !isGitHubDownloadURL(raw) {
-		return raw
-	}
-	if a.downloadProxyURL() != nil || a.runningMihomoDownloadProxyURL() != nil {
-		return raw
-	}
-	return defaultMihomoCoreSwitchAccelerator + raw
+	return a.githubDownloadRoute(raw).URL
 }
 
 func isGitHubDownloadURL(raw string) bool {
@@ -642,20 +770,12 @@ func isGitHubDownloadURL(raw string) bool {
 }
 
 func (a *App) rewriteDownloadURL(raw string) string {
-	if a == nil || a.DB == nil || (!strings.Contains(raw, "github.com/") && !strings.Contains(raw, "githubusercontent.com/")) {
+	if a == nil || a.DB == nil || !strings.Contains(raw, "github.com/") && !strings.Contains(raw, "githubusercontent.com/") {
 		return raw
 	}
-	var enabled bool
-	var accelerator sql.NullString
-	err := a.DB.QueryRow(`select github_accelerator_enabled,github_accelerator_url from system_setups order by id desc limit 1`).Scan(&enabled, &accelerator)
-	if err != nil || !enabled {
-		return raw
-	}
-	prefix := strings.TrimRight(strings.TrimSpace(accelerator.String), "/")
-	if prefix == "" {
-		return raw
-	}
-	return prefix + "/" + raw
+	// Same routing decision as real downloads so the previewed
+	// effective_download_url never lies about what will be fetched.
+	return a.githubDownloadRouteURL(raw)
 }
 
 func (a *App) EffectiveDownloadURL(raw string) string {
