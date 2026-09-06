@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import { startTransition, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { Layers3 } from "lucide-react";
 import { SolidPlate } from "@/components/liquid-glass/SolidPlate";
 import { cn } from "@/lib/utils";
@@ -66,7 +66,9 @@ export function ProxyNodeGrid({
     const sentinel = sentinelRef.current;
     if (!sentinel || limit >= filteredCount || typeof IntersectionObserver === "undefined") return;
     const observer = new IntersectionObserver((entries) => {
-      if (entries.some((entry) => entry.isIntersecting)) setLimit((value) => Math.min(value + CHUNK_SIZE, filteredCount));
+      if (entries.some((entry) => entry.isIntersecting)) {
+        startTransition(() => setLimit((value) => Math.min(value + CHUNK_SIZE, filteredCount)));
+      }
     }, { rootMargin: "320px" });
     observer.observe(sentinel);
     return () => observer.disconnect();
@@ -82,19 +84,28 @@ export function ProxyNodeGrid({
   const renderNodes = (items: ProxyNodeView[]) => (
     <div className={cn("grid", cardSize === "compact" ? "gap-1" : "gap-2")} style={gridStyle}>
       {items.map((node) => (
-        <ProxyNodeCard
+        <div
           key={node.key}
-          node={node}
-          active={node.key === selectedKey || node.name === selectedKey}
-          testing={Boolean(testingKeys?.has(node.key) || testingKeys?.has(node.name) || testingKey === node.key || testingKey === node.name)}
-          display={display}
-          cardSize={cardSize}
-          disableTextSelect={disableTextSelect}
-          low={low}
-          high={high}
-          onSelect={onSelect ? () => onSelect(node) : undefined}
-          onTest={onTest ? () => onTest(node) : undefined}
-        />
+          className="min-w-0"
+          style={{
+            contentVisibility: "auto",
+            contain: "layout paint style",
+            containIntrinsicSize: cardSize === "compact" ? "96px 52px" : "180px 112px",
+          }}
+        >
+          <ProxyNodeCard
+            node={node}
+            active={node.key === selectedKey || node.name === selectedKey}
+            testing={Boolean(testingKeys?.has(node.key) || testingKeys?.has(node.name) || testingKey === node.key || testingKey === node.name)}
+            display={display}
+            cardSize={cardSize}
+            disableTextSelect={disableTextSelect}
+            low={low}
+            high={high}
+            onSelect={onSelect ? () => onSelect(node) : undefined}
+            onTest={onTest ? () => onTest(node) : undefined}
+          />
+        </div>
       ))}
     </div>
   );

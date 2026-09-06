@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { startTransition, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { BarChart3, Clock3, Database, Eye, EyeOff, Globe2, Maximize2, PauseCircle, PlayCircle, RefreshCw, Route, Trash2, X, Zap } from "lucide-react";
 import { formatBytes } from "@/lib/api";
 import { cn } from "@/lib/utils";
@@ -219,7 +219,7 @@ function SparklineChart({
       }],
     };
   }, [areaColor, color, latestTimestamp, name, yAxisFloor]);
-  return <div className="relative h-full w-full overflow-hidden"><ZashboardEChart option={option} /></div>;
+  return <div className="relative h-full w-full overflow-hidden"><ZashboardEChart option={option} defer /></div>;
 }
 
 export function OverviewStatCards({ downloadSpeed, uploadSpeed, connections, downloadTotal, uploadTotal, memory, trafficHistory, connectionHistory }: { downloadSpeed: number; uploadSpeed: number; connections: number; downloadTotal: number; uploadTotal: number; memory: number | string; trafficHistory: OverviewTrafficHistoryPoint[]; connectionHistory: OverviewConnectionHistoryPoint[] }) {
@@ -447,7 +447,11 @@ export function ConnectionSankey({ connections, size = "l", editing = false, emb
   const [snapshot, setSnapshot] = useState(connections);
   const [fullScreen, setFullScreen] = useState(false);
   const paused = manuallyPaused || tooltipVisible || editing;
-  useEffect(() => { if (!paused) setSnapshot(connections); }, [connections, paused]);
+  useEffect(() => {
+    if (paused) return undefined;
+    const timer = window.setTimeout(() => startTransition(() => setSnapshot(connections)), 120);
+    return () => window.clearTimeout(timer);
+  }, [connections, paused]);
   useEffect(() => {
     if (!fullScreen) return;
     const close = (event: KeyboardEvent) => { if (event.key === "Escape") setFullScreen(false); };
@@ -501,7 +505,7 @@ export function ConnectionSankey({ connections, size = "l", editing = false, emb
   const content = <>
     <div className={cn("text-xs font-semibold uppercase tracking-wider text-muted-foreground", embedded && "sr-only")}>连接拓扑</div>
     <SolidPlate tone="subtle" className={cn("relative w-full overflow-hidden rounded-xl", embedded ? "h-full min-h-[280px]" : "mt-4 h-96", fullScreen && "h-[calc(100vh-2rem)] rounded-none")}>
-      {graph.nodes.length ? <ZashboardEChart option={option} onTooltipVisibilityChange={setTooltipVisible} /> : <EmptyState>暂无连接拓扑数据</EmptyState>}
+      {graph.nodes.length ? <ZashboardEChart option={option} defer onTooltipVisibilityChange={setTooltipVisible} /> : <EmptyState>暂无连接拓扑数据</EmptyState>}
       <div className="absolute bottom-1 right-1 flex flex-col gap-1">
         <button type="button" onClick={() => { setManuallyPaused((value) => !value); if (manuallyPaused) setSnapshot(connections); }} className="inline-flex h-8 w-8 items-center justify-center rounded-full text-muted-foreground hover:bg-muted hover:text-foreground" title={manuallyPaused ? "继续更新" : editing ? "编辑布局时已暂停" : "暂停更新"} disabled={editing}>{manuallyPaused || editing ? <PlayCircle className="h-4 w-4" /> : <PauseCircle className="h-4 w-4" />}</button>
         <button type="button" onClick={() => setFullScreen((value) => !value)} className="inline-flex h-8 w-8 items-center justify-center rounded-full text-muted-foreground hover:bg-muted hover:text-foreground" title={fullScreen ? "退出全屏" : "全屏查看"}>{fullScreen ? <X className="h-4 w-4" /> : <Maximize2 className="h-4 w-4" />}</button>
@@ -514,6 +518,7 @@ export function ConnectionSankey({ connections, size = "l", editing = false, emb
 
 export function ConnectionHistoryPanel({ connections }: { connections: OverviewConnection[] }) {
   const [closed, setClosed] = useState<ClosedConnectionRecord[]>([]);
+  const [visibleLimit, setVisibleLimit] = useState(80);
   const [aggregation, setAggregation] = useState<HistoryAggregation>(() => (localStorage.getItem("msf-mihomo-history-aggregation") as HistoryAggregation) || "source");
   const [cleanupDays, setCleanupDays] = useState(() => Number(localStorage.getItem("msf-mihomo-history-cleanup-days") || 30));
   const previous = useRef<Map<string, OverviewConnection> | null>(null);
@@ -532,9 +537,14 @@ export function ConnectionHistoryPanel({ connections }: { connections: OverviewC
   }, [cleanupDays]);
   const active = connections.map((row) => toClosedConnection(row, Date.now()));
   const rows = aggregateConnections([...closed, ...active], aggregation).sort((a, b) => b.download + b.upload - a.download - a.upload);
+  const visibleRows = rows.slice(0, visibleLimit);
   const totals = rows.reduce((sum, row) => ({ download: sum.download + row.download, upload: sum.upload + row.upload, count: sum.count + row.count }), { download: 0, upload: 0, count: 0 });
   const labels: Record<HistoryAggregation, string> = { source: "源 IP", target: "目标主机", process: "进程", outbound: "最终出口", proxyGroup: "代理分组" };
-  return <GlassSurface material="thick" className="rounded-2xl p-4">{sectionTitle(<Clock3 className="h-4 w-4" />, "连接统计", "仅在连接结束时写入历史，当前活跃连接只参与即时汇总", <div className="flex flex-wrap items-center gap-1.5"><select value={aggregation} onChange={(event) => { const value = event.target.value as HistoryAggregation; setAggregation(value); localStorage.setItem("msf-mihomo-history-aggregation", value); }} className="gary-field h-8 rounded-lg px-2 text-xs">{Object.entries(labels).map(([key, label]) => <option key={key} value={key}>{label}</option>)}</select><select value={cleanupDays} onChange={(event) => { const value = Number(event.target.value); setCleanupDays(value); localStorage.setItem("msf-mihomo-history-cleanup-days", String(value)); }} className="gary-field h-8 rounded-lg px-2 text-xs"><option value={0}>永不清理</option><option value={7}>保留一周</option><option value={30}>保留一月</option><option value={90}>保留三月</option></select><button type="button" onClick={() => void clearClosedConnections().then(() => setClosed([]))} className="inline-flex h-8 w-8 items-center justify-center rounded-lg text-muted-foreground hover:bg-destructive/10 hover:text-destructive" title="清空连接历史"><Trash2 className="h-3.5 w-3.5" /></button></div>)}<div className="mb-3 grid grid-cols-2 gap-2 sm:grid-cols-5">{[[labels[aggregation], rows.length], ["总流量", formatBytes(totals.download + totals.upload)], ["下载", formatBytes(totals.download)], ["上传", formatBytes(totals.upload)], ["连接次数", totals.count]].map(([label, value]) => <SolidPlate tone="regular" key={String(label)} className="p-3"><div className="text-[10px] text-muted-foreground">{label}</div><div className="mt-1 truncate text-lg font-light tabular-nums text-foreground">{value}</div></SolidPlate>)}</div>{rows.length ? <SolidPlate tone="strong" className="max-h-96 overflow-y-auto rounded-xl"><table className="w-full table-fixed text-xs"><thead className="sticky top-0 z-10 gary-solid-plate--strong"><tr><th className="w-[36%] px-3 py-2 text-left">{labels[aggregation]}</th><th className="px-2 py-2 text-right">下载</th><th className="px-2 py-2 text-right">上传</th><th className="px-2 py-2 text-right">总量</th><th className="px-2 py-2 text-right">次数</th></tr></thead><tbody>{rows.map((row) => <tr key={row.key} className="border-t border-border/30"><td className="truncate px-3 py-2 font-mono" title={row.key}>{row.key}</td><td className="px-2 py-2 text-right tabular-nums">{formatBytes(row.download)}</td><td className="px-2 py-2 text-right tabular-nums">{formatBytes(row.upload)}</td><td className="px-2 py-2 text-right tabular-nums">{formatBytes(row.download + row.upload)}</td><td className="px-2 py-2 text-right tabular-nums">{row.count}</td></tr>)}</tbody></table></SolidPlate> : <EmptyState>等待连接结束后生成历史统计</EmptyState>}</GlassSurface>;
+  return <GlassSurface material="thick" className="rounded-2xl p-4">
+    {sectionTitle(<Clock3 className="h-4 w-4" />, "连接统计", "仅在连接结束时写入历史，当前活跃连接只参与即时汇总", <div className="flex flex-wrap items-center gap-1.5"><select value={aggregation} onChange={(event) => { const value = event.target.value as HistoryAggregation; setAggregation(value); setVisibleLimit(80); localStorage.setItem("msf-mihomo-history-aggregation", value); }} className="gary-field h-8 rounded-lg px-2 text-xs">{Object.entries(labels).map(([key, label]) => <option key={key} value={key}>{label}</option>)}</select><select value={cleanupDays} onChange={(event) => { const value = Number(event.target.value); setCleanupDays(value); setVisibleLimit(80); localStorage.setItem("msf-mihomo-history-cleanup-days", String(value)); }} className="gary-field h-8 rounded-lg px-2 text-xs"><option value={0}>永不清理</option><option value={7}>保留一周</option><option value={30}>保留一月</option><option value={90}>保留三月</option></select><button type="button" onClick={() => void clearClosedConnections().then(() => setClosed([]))} className="inline-flex h-8 w-8 items-center justify-center rounded-lg text-muted-foreground hover:bg-destructive/10 hover:text-destructive" title="清空连接历史"><Trash2 className="h-3.5 w-3.5" /></button></div>)}
+    <div className="mb-3 grid grid-cols-2 gap-2 sm:grid-cols-5">{[[labels[aggregation], rows.length], ["总流量", formatBytes(totals.download + totals.upload)], ["下载", formatBytes(totals.download)], ["上传", formatBytes(totals.upload)], ["连接次数", totals.count]].map(([label, value]) => <SolidPlate tone="regular" key={String(label)} className="p-3"><div className="text-[10px] text-muted-foreground">{label}</div><div className="mt-1 truncate text-lg font-light tabular-nums text-foreground">{value}</div></SolidPlate>)}</div>
+    {rows.length ? <SolidPlate tone="strong" className="max-h-96 overflow-y-auto rounded-xl"><table className="w-full table-fixed text-xs"><thead className="sticky top-0 z-10 gary-solid-plate--strong"><tr><th className="w-[36%] px-3 py-2 text-left">{labels[aggregation]}</th><th className="px-2 py-2 text-right">下载</th><th className="px-2 py-2 text-right">上传</th><th className="px-2 py-2 text-right">总量</th><th className="px-2 py-2 text-right">次数</th></tr></thead><tbody>{visibleRows.map((row) => <tr key={row.key} className="border-t border-border/30"><td className="truncate px-3 py-2 font-mono" title={row.key}>{row.key}</td><td className="px-2 py-2 text-right tabular-nums">{formatBytes(row.download)}</td><td className="px-2 py-2 text-right tabular-nums">{formatBytes(row.upload)}</td><td className="px-2 py-2 text-right tabular-nums">{formatBytes(row.download + row.upload)}</td><td className="px-2 py-2 text-right tabular-nums">{row.count}</td></tr>)}</tbody></table>{visibleRows.length < rows.length ? <button type="button" onClick={() => setVisibleLimit((value) => Math.min(value + 80, rows.length))} className="mx-auto my-2 block rounded-lg px-3 py-1.5 text-xs text-muted-foreground hover:bg-muted hover:text-foreground">加载更多（剩余 {rows.length - visibleRows.length} 条）</button> : null}</SolidPlate> : <EmptyState>等待连接结束后生成历史统计</EmptyState>}
+  </GlassSurface>;
 }
 
 function normalizeRuleHits(payload: unknown) {
