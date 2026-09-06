@@ -1119,6 +1119,18 @@ table inet msf {
     elements = { 2001:4860:4860::8888/128, 2001:4860:4860::8844/128, 2606:4700:4700::1111/128, 2606:4700:4700::1001/128 }
   }
 
+  set china_udp_ipv4 {
+    type ipv4_addr
+    flags interval
+    elements = { %s }
+  }
+
+  set china_udp_ipv6 {
+    type ipv6_addr
+    flags interval
+    elements = { %s }
+  }
+
   set fake_ipv4 {
     type ipv4_addr
     flags interval
@@ -1166,6 +1178,8 @@ table inet msf {
     udp dport { 123 } return
     udp dport { 53 } accept
     udp dport @game_udp_bypass return
+    ip daddr @china_udp_ipv4 meta l4proto udp return
+    ip6 daddr @china_udp_ipv6 meta l4proto udp return
     meta l4proto udp meta mark set 1 tproxy to :7896 accept
   }
 
@@ -1178,6 +1192,8 @@ table inet msf {
     udp dport { 123 } return
     udp dport { 53 } accept
     udp dport @game_udp_bypass return
+    ip daddr @china_udp_ipv4 meta l4proto udp return
+    ip6 daddr @china_udp_ipv6 meta l4proto udp return
     meta mark set 1
   }
 
@@ -1193,17 +1209,46 @@ table inet msf {
     iifname { %s } meta l4proto udp ct direction original goto proxy-tproxy
   }
 }
-`, fakeIPv4RouteCIDR(cfg.FakeIPRangeV4), fakeIPv6RouteCIDR(cfg.FakeIPRangeV6), gameUDPBypass, ifaceSet, ifaceSet)
+`, a.chinaUDPBypassElements(false), a.chinaUDPBypassElements(true),
+		fakeIPv4RouteCIDR(cfg.FakeIPRangeV4), fakeIPv6RouteCIDR(cfg.FakeIPRangeV6), gameUDPBypass, ifaceSet, ifaceSet)
+	if !a.chinaUDPBypassEnabled() {
+		content = removeNFTSetBlock(content, "china_udp_ipv4")
+		content = removeNFTSetBlock(content, "china_udp_ipv6")
+		content = removeNFTReferenceLines(content, "china_udp_ipv4", "china_udp_ipv6")
+	}
 	if cfg.EnableIPv6 {
 		return content
 	}
-	for _, setName := range []string{"local_ipv6", "china_dns_ipv6", "dns_ipv6", "fake_ipv6"} {
+	for _, setName := range []string{"local_ipv6", "china_dns_ipv6", "dns_ipv6", "fake_ipv6", "china_udp_ipv6"} {
 		content = removeNFTSetBlock(content, setName)
 	}
+	content = removeNFTReferenceLines(content, "local_ipv6", "china_dns_ipv6", "dns_ipv6", "fake_ipv6", "china_udp_ipv6")
 	lines := strings.SplitAfter(content, "\n")
 	filtered := lines[:0]
 	for _, line := range lines {
-		if strings.Contains(line, "ip6 ") || strings.Contains(line, "@local_ipv6") || strings.Contains(line, "@china_dns_ipv6") || strings.Contains(line, "@dns_ipv6") || strings.Contains(line, "@fake_ipv6") {
+		if strings.Contains(line, "ip6 ") {
+			continue
+		}
+		filtered = append(filtered, line)
+	}
+	return strings.Join(filtered, "")
+}
+
+// removeNFTReferenceLines drops every rule line that references one of the
+// given sets; a set definition removed while a rule still references it makes
+// nft -f fail atomically.
+func removeNFTReferenceLines(content string, names ...string) string {
+	lines := strings.SplitAfter(content, "\n")
+	filtered := lines[:0]
+	for _, line := range lines {
+		drop := false
+		for _, name := range names {
+			if strings.Contains(line, "@"+name) {
+				drop = true
+				break
+			}
+		}
+		if drop {
 			continue
 		}
 		filtered = append(filtered, line)
@@ -1272,6 +1317,73 @@ func (a *App) cachedGameUDPBypassPorts() string {
 // transaction.
 func (a *App) ensureGameUDPBypassCache() {
 	a.setCachedGameUDPBypassPorts(a.setting("network.game_udp_bypass_ports", ""))
+}
+
+// chinaUDPBypassEnabled reports whether domestic-destination UDP traffic is
+// bypassed at the kernel (never entering mihomo's tunnel).  Default on:
+// mihomo's 60s idle UDP session timeout is the root cause of periodic game
+// disconnects, and CN-bound UDP is direct anyway.  Reads the in-memory cache
+// only — same DB-in-transaction constraint as gameUDPBypassPorts.
+func (a *App) chinaUDPBypassEnabled() bool {
+	a.chinaUdpBypassMu.RLock()
+	defer a.chinaUdpBypassMu.RUnlock()
+	return a.chinaUdpBypassValue != "false"
+}
+
+func (a *App) setCachedChinaUDPBypass(value string) {
+	a.chinaUdpBypassMu.Lock()
+	a.chinaUdpBypassValue = value
+	a.chinaUdpBypassMu.Unlock()
+}
+
+// ensureChinaUDPBypassCache loads the setting once at startup, outside any
+// transaction.
+func (a *App) ensureChinaUDPBypassCache() {
+	a.setCachedChinaUDPBypass(a.setting("network.china_udp_bypass", ""))
+}
+
+// chinaUDPBypassElements renders the CN CIDR list for the nft interval set.
+// A runtime data file (refreshable via the component update channel) takes
+// precedence; the embedded snapshot is the fallback.  Every line is validated
+// — an operator-supplied file with garbage must never break nft.
+func (a *App) chinaUDPBypassElements(v6 bool) string {
+	rel := "network/chnroute_v4.txt"
+	runtimeRel := "configs/network/chnroute_v4.txt"
+	if v6 {
+		rel = "network/chnroute_v6.txt"
+		runtimeRel = "configs/network/chnroute_v6.txt"
+	}
+	sources := []string{}
+	if content, err := os.ReadFile(filepath.Join(a.DataDir, runtimeRel)); err == nil {
+		sources = append(sources, string(content))
+	}
+	if embedded, ok := runtimeTemplateText(rel); ok {
+		sources = append(sources, embedded)
+	}
+	prefixes := make([]string, 0, 8192)
+	seen := map[string]bool{}
+	for _, source := range sources {
+		for _, line := range strings.Split(source, "\n") {
+			line = strings.TrimSpace(line)
+			if line == "" || strings.HasPrefix(line, "#") || seen[line] {
+				continue
+			}
+			if prefix, err := netip.ParsePrefix(line); err != nil {
+				continue
+			} else {
+				isV6 := prefix.Addr().Is6()
+				if isV6 != v6 {
+					continue
+				}
+			}
+			seen[line] = true
+			prefixes = append(prefixes, line)
+		}
+		if len(prefixes) > 0 {
+			break // first source that yields valid entries wins
+		}
+	}
+	return strings.Join(prefixes, ", ")
 }
 
 func (a *App) ensureMosDNSRuleFiles() error {
