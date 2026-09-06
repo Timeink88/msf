@@ -2,6 +2,28 @@
 
 ## 未发布
 
+## v0.6.3 - 2026-09-06
+
+### 中文
+
+#### 大规模代理页面性能与加载优化
+
+- 精简 Mihomo 代理接口响应，移除重复别名和默认原始响应，并支持 gzip；搜索结果会同步裁剪 provider 节点，减少冷加载传输与解析开销。
+- 主界面和各功能页面改为按路由懒加载；EarthRenderer、YamlEditor 等重型模块仅在需要时加载，降低首次进入登录页和管理页面的脚本开销。
+- Mihomo 代理节点列表采用视口级内容跳过和分批渲染，减少大量节点同时参与布局、绘制和 React 更新。
+- Mihomo 概览中的图表改为接近视口时初始化，连接拓扑更新增加防抖和低优先级调度，连接历史按批次显示，改善持续刷新时的交互流畅度。
+- 保留登录页外观质量、场景和用户选择的动态背景设置，默认使用“动态场景 + 平衡”效果档位。
+
+### English
+
+#### Large proxy-page performance and loading improvements
+
+- Reduced Mihomo proxy API responses by removing duplicate aliases and the default raw payload, added gzip support, and filtered provider nodes together with search results to lower cold-load transfer and parsing cost.
+- Switched the main shell and feature pages to route-level lazy loading; heavy modules such as EarthRenderer and YamlEditor load only when needed, reducing initial script work.
+- Added viewport-aware content skipping and batched rendering for Mihomo proxy nodes so large lists perform less layout, paint, and React work at once.
+- Deferred Overview chart initialization near the viewport, debounced and deprioritized connection-topology updates, and batched connection-history rows to keep live refreshes interactive.
+- Preserved login appearance, scene, and user-selected dynamic-background settings, with Dynamic scene + Balanced quality as the default.
+
 ## v0.6.2 - 2026-08-29
 
 ### 中文

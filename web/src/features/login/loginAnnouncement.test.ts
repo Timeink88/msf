@@ -6,7 +6,7 @@ const styles = readFileSync(new URL("../../app/login/login.css", import.meta.url
 
 describe("versioned login announcement", () => {
   it("separates session close from permanent dismissal", () => {
-    expect(page).toContain('LOGIN_ANNOUNCEMENT_ID = "2026-08-v0.6.2-smart-core"');
+    expect(page).toContain('LOGIN_ANNOUNCEMENT_ID = "2026-09-v0.6.3-performance"');
     expect(page).toContain("window.sessionStorage.setItem(LOGIN_ANNOUNCEMENT_SESSION_KEY, \"1\")");
     expect(page).toContain("window.localStorage.setItem(LOGIN_ANNOUNCEMENT_HIDDEN_KEY, \"1\")");
     expect(page).toContain("不再显示");
@@ -16,9 +16,9 @@ describe("versioned login announcement", () => {
   });
 
   it("contains the requested release notes and responsive bubble layout", () => {
-    expect(page).toContain("Meta / Smart 双核心");
-    expect(page).toContain("LightGBM 与 ASN 数据");
-    expect(page).toContain("实验性 Alpha 功能");
+    expect(page).toContain("代理接口响应更轻");
+    expect(page).toContain("大列表与概览更流畅");
+    expect(page).toContain("搜索时同步过滤 provider 节点");
     expect(page).toContain("Star 与 Fork");
     expect(styles).toContain(".msf-login-announcement");
     expect(styles).toContain("position: fixed");

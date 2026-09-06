@@ -44,7 +44,7 @@ const loginWavePalettes = {
   },
 } as const;
 
-const LOGIN_ANNOUNCEMENT_ID = "2026-08-v0.6.2-smart-core";
+const LOGIN_ANNOUNCEMENT_ID = "2026-09-v0.6.3-performance";
 const LOGIN_ANNOUNCEMENT_HIDDEN_KEY = `msf-login-announcement:${LOGIN_ANNOUNCEMENT_ID}:hidden`;
 const LOGIN_ANNOUNCEMENT_SESSION_KEY = `msf-login-announcement:${LOGIN_ANNOUNCEMENT_ID}:session`;
 
@@ -208,18 +208,18 @@ export default function LoginPage() {
             <span className="msf-login-announcement-icon" aria-hidden="true"><Megaphone /></span>
             <div>
               <p>本次更新</p>
-              <h2 id="login-announcement-title">v0.6.2：Mihomo Smart 核心</h2>
+              <h2 id="login-announcement-title">v0.6.3：大规模代理页面性能优化</h2>
             </div>
           </div>
 
           <ol className="msf-login-announcement-features">
             <li>
-              <strong>Meta / Smart 双核心</strong>
-              <span>现在可选择官方稳定版或 Smart Alpha 核心，并编辑 <code>smart</code> 代理分组；两种核心都会保留，切换回来无需重复下载。</span>
+              <strong>代理接口响应更轻</strong>
+              <span>Mihomo 代理数据移除重复字段并支持 gzip，搜索时同步过滤 provider 节点，减少首次加载的传输和解析开销。</span>
             </li>
             <li>
-              <strong>资源与配置更可靠</strong>
-              <span>LightGBM 与 ASN 数据支持进度和取消；切换核心会先回到默认配置并保留用户配置。Smart 属于实验性 Alpha 功能，使用前建议备份配置。</span>
+              <strong>大列表与概览更流畅</strong>
+              <span>代理节点和连接历史采用分批显示，概览图表按需初始化，连接拓扑更新经过调度，降低大规模数据下的页面阻塞。</span>
             </li>
           </ol>
 
