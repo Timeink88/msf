@@ -3,32 +3,32 @@ import { Navigate, Route, Routes, useLocation, useSearchParams } from "react-rou
 import { AlertCircle, Loader2, RefreshCw } from "lucide-react";
 import { useAuth } from "@/lib/auth";
 
-import HomePage from "@/app/page";
 import LoginPage from "@/app/login/page";
-import MosdnsPage from "@/app/mosdns/page";
-import MosdnsOverviewPage from "@/app/mosdns/overview/page";
-import MosdnsRulesPage from "@/app/mosdns/rules/page";
-import MosdnsClientsPage from "@/app/mosdns/clients/page";
-import MosdnsQueryLogPage from "@/app/mosdns/query-log/page";
-import MosdnsSystemPage from "@/app/mosdns/system/page";
-import MosdnsConfigPage from "@/app/mosdns/service-config/page";
-import MosdnsLogsPage from "@/app/mosdns/logs/page";
-import ProxyPage from "@/app/proxy/page";
-import MihomoPage from "@/app/mihomo/page";
-import MihomoOverviewPage from "@/app/mihomo/overview/page";
-import MihomoConnectionsPage from "@/app/mihomo/connections/page";
-import MihomoConfigPage from "@/app/mihomo/config/page";
-import MihomoLogsPage from "@/app/mihomo/logs/page";
-import ProcessPage from "@/app/process/page";
-import ConfigPage from "@/app/config/page";
-import LogsPage from "@/app/logs/page";
-import { SettingsClient } from "@/app/settings/SettingsClient";
-import { SetupPage } from "@/pages/SetupPage";
-import { SingBoxPage } from "@/pages/SingBoxPage";
-import { LiquidGlassLab } from "@/pages/LiquidGlassLab";
 import { SceneBackdrop } from "@/components/liquid-glass/SceneBackdrop";
 import { GlassSurface } from "@/components/liquid-glass/GlassSurface";
 
+const MosdnsPage = lazy(() => import("@/app/mosdns/page"));
+const HomePage = lazy(() => import("@/app/page"));
+const MosdnsOverviewPage = lazy(() => import("@/app/mosdns/overview/page"));
+const MosdnsRulesPage = lazy(() => import("@/app/mosdns/rules/page"));
+const MosdnsClientsPage = lazy(() => import("@/app/mosdns/clients/page"));
+const MosdnsQueryLogPage = lazy(() => import("@/app/mosdns/query-log/page"));
+const MosdnsSystemPage = lazy(() => import("@/app/mosdns/system/page"));
+const MosdnsConfigPage = lazy(() => import("@/app/mosdns/service-config/page"));
+const MosdnsLogsPage = lazy(() => import("@/app/mosdns/logs/page"));
+const ProxyPage = lazy(() => import("@/app/proxy/page"));
+const MihomoPage = lazy(() => import("@/app/mihomo/page"));
+const MihomoOverviewPage = lazy(() => import("@/app/mihomo/overview/page"));
+const MihomoConnectionsPage = lazy(() => import("@/app/mihomo/connections/page"));
+const MihomoConfigPage = lazy(() => import("@/app/mihomo/config/page"));
+const MihomoLogsPage = lazy(() => import("@/app/mihomo/logs/page"));
+const ProcessPage = lazy(() => import("@/app/process/page"));
+const ConfigPage = lazy(() => import("@/app/config/page"));
+const LogsPage = lazy(() => import("@/app/logs/page"));
+const SettingsClient = lazy(() => import("@/app/settings/SettingsClient").then((module) => ({ default: module.SettingsClient })));
+const SetupPage = lazy(() => import("@/pages/SetupPage").then((module) => ({ default: module.SetupPage })));
+const SingBoxPage = lazy(() => import("@/pages/SingBoxPage").then((module) => ({ default: module.SingBoxPage })));
+const LiquidGlassLab = lazy(() => import("@/pages/LiquidGlassLab").then((module) => ({ default: module.LiquidGlassLab })));
 const MihomoProxiesPage = lazy(() => import("@/app/mihomo/proxies/page"));
 const MihomoRulesPage = lazy(() => import("@/app/mihomo/rules/page"));
 
@@ -134,24 +134,17 @@ function protectedRoute(element: React.ReactNode) {
 }
 
 function MihomoProxiesRoute() {
-  return (
-    <Suspense fallback={<Splash />}>
-      <MihomoProxiesPage />
-    </Suspense>
-  );
+  return <MihomoProxiesPage />;
 }
 
 function MihomoRulesRoute() {
-  return (
-    <Suspense fallback={<Splash />}>
-      <MihomoRulesPage />
-    </Suspense>
-  );
+  return <MihomoRulesPage />;
 }
 
 export function App() {
   return (
-    <Routes>
+    <Suspense fallback={<Splash />}>
+      <Routes>
       <Route path="/setup" element={<SetupRoute />} />
       <Route path="/login" element={<PublicOnly><LoginPage /></PublicOnly>} />
 
@@ -200,7 +193,8 @@ export function App() {
         <Route path="/__liquid-glass-lab" element={protectedRoute(<LiquidGlassLab />)} />
       ) : null}
 
-      <Route path="*" element={<Navigate to="/" replace />} />
-    </Routes>
+        <Route path="*" element={<Navigate to="/" replace />} />
+      </Routes>
+    </Suspense>
   );
 }

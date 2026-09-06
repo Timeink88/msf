@@ -738,18 +738,40 @@ func (a *App) mihomoProxiesPayload(r *http.Request) map[string]any {
 			proxyMap = filterMihomoProxyMap(proxyMap, search)
 		}
 	}
-	return map[string]any{
+	providers := normalizeProviderMap(rawProviders["providers"])
+	if r != nil && firstNonEmpty(r.URL.Query().Get("search"), r.URL.Query().Get("q")) != "" {
+		q := strings.ToLower(strings.TrimSpace(firstNonEmpty(r.URL.Query().Get("search"), r.URL.Query().Get("q"))))
+		filtered := map[string]map[string]any{}
+		for name, row := range providers {
+			copy := map[string]any{}
+			for key, item := range row {
+				copy[key] = item
+			}
+			matches := []map[string]any{}
+			for _, item := range anyMapSlice(row["proxies"]) {
+				if strings.Contains(strings.ToLower(stringMapValue(item, "name")), q) {
+					matches = append(matches, item)
+				}
+			}
+			if len(matches) > 0 {
+				copy["proxies"] = matches
+				filtered[name] = copy
+			}
+		}
+		providers = filtered
+	}
+	payload := map[string]any{
 		"groups":            groups,
-		"proxy_groups":      groups,
-		"proxy_list":        proxies,
-		"nodes":             proxies,
 		"proxies":           proxyMap,
-		"providers":         normalizeProviderMap(rawProviders["providers"]),
-		"raw":               rawProxies,
+		"providers":         providers,
 		"test_policy":       pagePolicy,
 		"group_test_policy": groupPolicies,
 		"config_authority":  a.mihomoConfigModePayload(),
 	}
+	if r != nil && r.URL.Query().Get("include_raw") == "1" {
+		payload["raw"] = rawProxies
+	}
+	return payload
 }
 
 func mergeMihomoProviderProxies(rawProxies, rawProviders map[string]any) map[string]any {

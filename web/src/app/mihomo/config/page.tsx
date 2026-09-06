@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { lazy, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Play,
   Square,
@@ -24,7 +24,7 @@ import { AppShell } from "@/components/AppShell";
 import { WorkbenchHeader } from "@/components/layout/WorkbenchHeader";
 import { ModalViewport } from "@/components/liquid-glass/ModalViewport";
 import { useToaster, ToastStack } from "@/components/Toaster";
-import { YamlEditor } from "@/components/mihomo/YamlEditor";
+const YamlEditor = lazy(() => import("@/components/mihomo/YamlEditor").then((module) => ({ default: module.YamlEditor })));
 import { api, apiList, formatBytes, formatPercent } from "@/lib/api";
 import { cn } from "@/lib/utils";
 

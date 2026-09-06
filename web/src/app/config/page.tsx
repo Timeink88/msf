@@ -1,13 +1,13 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { lazy, useEffect, useMemo, useRef, useState } from "react";
 import { ArrowLeft, CheckCircle2, ChevronsUpDown, FileText, LockKeyhole, RefreshCw, Save, ShieldCheck } from "lucide-react";
 import { AppShell } from "@/components/AppShell";
 import { ConfigFileTree, collectConfigDirectoryPaths, countConfigFiles, type ConfigFileNode } from "@/components/config/ConfigFileTree";
 import { GlassButton } from "@/components/liquid-glass/GlassButton";
 import { GlassSurface } from "@/components/liquid-glass/GlassSurface";
 import { SolidPlate } from "@/components/liquid-glass/SolidPlate";
-import { YamlEditor } from "@/components/mihomo/YamlEditor";
+const YamlEditor = lazy(() => import("@/components/mihomo/YamlEditor").then((module) => ({ default: module.YamlEditor })));
 import { ToastStack, useToaster } from "@/components/Toaster";
 import { api, apiList } from "@/lib/api";
 import { cn } from "@/lib/utils";

@@ -452,7 +452,7 @@ func (a *App) handleMihomoConnectionClose(w http.ResponseWriter, r *http.Request
 
 func (a *App) handleMihomoProxies(w http.ResponseWriter, r *http.Request) {
 	payload := a.mihomoProxiesPayload(r)
-	writeJSON(w, http.StatusOK, map[string]any{"success": true, "data": payload, "groups": payload["groups"], "proxy_groups": payload["proxy_groups"], "proxy_list": payload["proxy_list"], "proxies": payload["proxies"], "providers": payload["providers"]})
+	writeJSONGzip(w, r, http.StatusOK, map[string]any{"success": true, "data": payload})
 }
 
 func (a *App) handleMihomoProxySelect(w http.ResponseWriter, r *http.Request) {

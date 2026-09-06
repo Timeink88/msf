@@ -1,6 +1,8 @@
 package server
 
 import (
+	"bytes"
+	"compress/gzip"
 	"context"
 	"crypto/rand"
 	"database/sql"
@@ -478,6 +480,25 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 	if err := json.NewEncoder(w).Encode(v); err != nil {
 		log.Printf("write json: %v", err)
 	}
+}
+
+func writeJSONGzip(w http.ResponseWriter, r *http.Request, status int, v any) {
+	if !strings.Contains(r.Header.Get("Accept-Encoding"), "gzip") {
+		writeJSON(w, status, v)
+		return
+	}
+	var b bytes.Buffer
+	if err := json.NewEncoder(&b).Encode(v); err != nil {
+		writeJSON(w, status, v)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.Header().Set("Content-Encoding", "gzip")
+	w.Header().Add("Vary", "Accept-Encoding")
+	w.WriteHeader(status)
+	zw := gzip.NewWriter(w)
+	_, _ = zw.Write(b.Bytes())
+	_ = zw.Close()
 }
 
 func writeError(w http.ResponseWriter, status int, code, message string) {
