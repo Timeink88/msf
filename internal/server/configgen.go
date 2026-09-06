@@ -45,6 +45,16 @@ type SetupConfig struct {
 	GitHubSocks5Proxy        string `json:"github_socks5_proxy"`
 	GitHubAcceleratorEnabled bool   `json:"github_accelerator_enabled"`
 	GitHubAcceleratorURL     string `json:"github_accelerator_url"`
+
+	// DomesticUpstreams 保存向导 DNS 测速后选出的国内上游（跨供应商 Top3）。
+	// 为空时使用模板默认池；每项 Protocol 取 udp/tcp/tls/https。
+	DomesticUpstreams []SetupUpstreamChoice `json:"domestic_upstreams"`
+}
+
+type SetupUpstreamChoice struct {
+	Name     string `json:"name"`
+	Protocol string `json:"protocol"`
+	Addr     string `json:"addr"`
 }
 
 func (c *SetupConfig) defaults() {

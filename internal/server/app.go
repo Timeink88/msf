@@ -337,6 +337,7 @@ func (a *App) publicAPI(path string) bool {
 		"/api/v1/setup/reset/status",
 		"/api/v1/auth/login",
 		"/api/v1/auth/refresh",
+		"/api/v1/system/dns-benchmark",
 		"/api/v1/license-activation/status",
 		"/api/v1/license-activation/hardware-fingerprint",
 	}
@@ -353,6 +354,7 @@ func (a *App) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v1/daemon/status", a.handleDaemonStatus)
 	mux.HandleFunc("POST /api/v1/daemon/restart", a.handleDaemonRestart)
 	mux.HandleFunc("POST /api/v1/daemon/stop", a.handleDaemonStop)
+	mux.HandleFunc("POST /api/v1/system/dns-benchmark", a.handleDNSBenchmark)
 
 	mux.HandleFunc("GET /api/v1/setup/check", a.handleSetupCheck)
 	mux.HandleFunc("GET /api/v1/setup/system-info", a.handleSetupSystemInfo)

@@ -39,6 +39,7 @@ import GradientWaves from "@/components/react-bits/GradientWaves";
 import { applyTheme, getInitialTheme, prefersDarkMode, themeOptions, type ThemeMode } from "@/lib/appearance";
 import { useLanguage, type AppLanguage } from "@/lib/localization";
 import { validateAllSetupSteps, validateSetupStep, type SetupValidationIssue } from "@/pages/setup/setup-validation";
+import { DnsBenchmarkPanel, type DnsBenchmarkCandidate } from "@/components/mosdns/DnsBenchmarkPanel";
 import "@/pages/setup/setup-page.css";
 
 interface NetworkInterface {
@@ -164,6 +165,7 @@ export const defaultForm = {
   github_socks5_proxy: "",
   github_accelerator_enabled: false,
   github_accelerator_url: "",
+  domestic_upstreams: [] as Array<{ name: string; protocol: string; addr: string }>,
 };
 
 export type SetupForm = typeof defaultForm;
@@ -1145,7 +1147,19 @@ export function SetupPage() {
     void fetchPreflight().catch((err) => setMessage(errorMessage(err)));
   }, [downloadStatus, fetchPreflight, step]);
 
-  const update = (key: keyof SetupForm, value: string | boolean) => {
+  const handleApplySetupBenchmark = (recommended: DnsBenchmarkCandidate[]) => {
+    if (recommended.length === 0) return;
+    update(
+      "domestic_upstreams",
+      recommended.map((item) => ({
+        name: item.name,
+        protocol: item.protocol === "doh" ? "https" : item.protocol === "gateway" ? "udp" : item.protocol,
+        addr: item.addr,
+      })),
+    );
+  };
+
+  const update = (key: keyof SetupForm, value: string | boolean | SetupForm["domestic_upstreams"]) => {
     if (key === "linux_proxy_mode" && isTunOnlyRuntime && value !== "tun") return;
     if (key === "auto_set_dns" && isMacOSRuntime && value !== true) return;
     if (key === "timezone" || key === "linux_proxy_mode") {
@@ -1708,6 +1722,18 @@ export function SetupPage() {
                           onChange={(event) => update("dns_off", event.target.value)}
                         />
                       </Field>
+                    </div>
+                    <div className="mt-3">
+                      <DnsBenchmarkPanel
+                        onApply={handleApplySetupBenchmark}
+                        applyLabel="使用测速推荐"
+                        description="安装前先对主流公共 DNS 与本网络网关实测 3 轮（含不存在域），自动剔除不可达者并推荐跨供应商 Top3 作为国内上游；跳过则使用内置默认组合。"
+                      />
+                      {form.domestic_upstreams.length > 0 && (
+                        <p className="mt-2 text-[11px] text-muted-foreground">
+                          已选上游：{form.domestic_upstreams.map((item) => `${item.name}（${item.addr}）`).join("、")}
+                        </p>
+                      )}
                     </div>
                   </div>
                   <div className="rounded-lg border border-border bg-card p-3">

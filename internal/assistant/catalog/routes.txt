@@ -334,6 +334,7 @@ POST /api/v1/singbox/stop
 POST /api/v1/singbox/validate
 POST /api/v1/singbox/version
 POST /api/v1/system/diagnostics/run
+POST /api/v1/system/dns-benchmark
 POST /api/v1/update/cancel
 POST /api/v1/update/check
 POST /api/v1/update/download
