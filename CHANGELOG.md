@@ -2,6 +2,81 @@
 
 ## 未发布
 
+### 中文
+
+#### 国内 UDP 内核直连（游戏断线的根治性方案）
+
+- 新增「国内 UDP 直连」能力（默认开启）：目的地为国内 IP 的 UDP 流量在 nftables 内核层直接放行、不再经过代理隧道——所有国服游戏零配置免受代理隧道 60 秒 UDP 会话空闲超时导致的周期性断线影响；同时卸载了代理核心的国内 UDP 会话负担。CN IP 段内置随二进制分发（IPv4 6233 段 / IPv6 3395 段），支持运行时数据文件覆盖以便后续经组件更新通道刷新。
+- 设置页「系统管理 → UDP 直连」：新增总开关（即时热生效），原「游戏 UDP 直连端口」保留为补充覆盖（海外目标但需直连的场景，如自建语音服）。
+#### DNS 上游现代化（forward 迁移 + 首次测速选优）
+
+- MosDNS 上游插件从魔改版 aliapi 全面迁移到增强版 forward：不存在域名（NXDOMAIN）不再等满 5 秒（实测 ~50-90ms），裸 IP 的 UDP/TCP 上游恢复可用（实测 9-17ms），上游故障毫秒级快速失败并自动重置连接；国外上游经 socks5 代理的行为不变。
+- 国内默认池升级为跨供应商并发组合：阿里 UDP + 腾讯 UDP + 阿里 DoH（低延迟与加密兜底兼顾）；已有用户的上游配置原样保留、平滑兼容（裸 IP 自动补协议前缀，旧 aliapi 专用条目已不再支持并在保存时明确提示）。
+- 新增 DNS 上游测速：安装向导"网络与 DNS"步骤内实测主流公共 DNS（UDP 与 IP 直连 DoH）+ 本网络网关/DHCP DNS，每候选 3 轮（含不存在域探测）自动剔除不可达者；推荐组合由纯延迟排序升级为「两条最快 UDP + 一条 DoH 加密兜底」，避免低延迟网关把加密上游挤出推荐；MosDNS 系统页新增同一测速面板，可随时重测并应用为国内上游。
+- 上游编辑器移除 aliapi 协议选项；密钥字段的脱敏与保留机制不变。
+
+#### 工程修复
+
+- 修复 cloudflareredirect 包的 Windows 交叉编译：进程组设置按平台拆分（Setpgid）。
+- 修复 smart 内核资源校验测试在部分文件系统上因 mtime 粒度不足产生的间歇性失败。
+
+#### 升级注意事项
+
+- 国内 UDP 直连默认开启。若自定义了「国内 IP 的 UDP 走代理」规则（罕见，如国内中转），请在设置页关闭该开关。
+- 旧配置中的 aliapi 专用上游（阿里私享 DoH API）不再受支持：保存时会被明确拒绝，请改用 udp/tcp/tls/https 形式的上游；普通公共 DNS 上游不受影响。
+
+### English
+
+#### Kernel-level CN UDP bypass (root fix for game disconnects)
+
+- New "CN UDP direct" capability (on by default): UDP traffic destined for
+  CN IPs is released at the nftables kernel layer and never enters the proxy
+  tunnel — every domestic game is immune to the proxy core's 60s idle UDP
+  session timeout without any per-game configuration, and the core's CN UDP
+  session load is removed. CN CIDR lists ship embedded (6233 v4 / 3395 v6)
+  and can be overridden by runtime data files for future refreshes.
+- Settings → System → "UDP direct": a master toggle (hot-applied), with the
+  previous game-UDP port list kept as a supplemental override for
+  direct-but-overseas targets (e.g. self-hosted voice servers).
+#### DNS upstream modernization (forward migration + first-run benchmark)
+
+- MosDNS upstream plugin migrated from the modified aliapi to the enhanced
+  forward plugin: NXDOMAIN answers no longer hang for the full 5s entry
+  timeout (measured ~50-90ms), bare-IP UDP/TCP upstreams work again
+  (measured 9-17ms), and failed upstreams are dropped within milliseconds
+  with automatic connection resets. Foreign upstreams over socks5 are
+  unchanged.
+- The default domestic pool is now a cross-vendor concurrent mix (Ali UDP +
+  Tencent UDP + Ali DoH). Existing overrides are preserved and migrated
+  transparently (bare IPs gain protocol prefixes; legacy aliapi-only
+  entries are rejected with an explicit message).
+- New DNS upstream benchmark: the setup wizard's Network & DNS step now
+  probes major public resolvers (UDP and IP-direct DoH) plus the local
+  gateway/DHCP DNS — three rounds per candidate including an NXDOMAIN
+  probe — drops unreachable candidates, and recommends a cross-vendor
+  Top3 that can be applied in one click; the recommended mix is now
+  "two fastest UDP + one DoH fallback" instead of pure latency ordering,
+  so a fast gateway can no longer push the encrypted upstream out of the
+  recommendation. The same panel is available on the MosDNS system page
+  for re-benchmarking at any time.
+- The upstream editor no longer offers the aliapi protocol; secret
+  redaction and preservation for stored overrides is unchanged.
+
+#### Engineering fixes
+
+- Windows cross-compilation of the cloudflareredirect package fixed:
+  process-group setup split per platform (Setpgid).
+- Fixed intermittent smart-core resource verification test failures caused
+  by insufficient mtime granularity on some filesystems.
+
+#### Upgrade notes
+
+- CN UDP direct is enabled by default. If you have custom rules routing a CN
+  IP's UDP through the proxy (rare, e.g. a CN relay), turn the toggle off.
+- Legacy aliapi-specific upstreams (Ali private DoH API) are no longer
+  supported and will be rejected on save; switch them to udp/tcp/tls/https
+  servers. Regular public DNS upstreams are unaffected.
+
 ## v0.6.3 - 2026-09-05
 
 ### 中文
