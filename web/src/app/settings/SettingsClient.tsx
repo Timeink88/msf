@@ -10,6 +10,7 @@ import {
   EyeOff,
   FileText,
   GitBranch,
+  Gamepad2,
   Languages,
   Loader2,
   Menu,
@@ -81,6 +82,7 @@ import { applySkinTint, parseSkinTint } from "@/lib/skinTint";
 import { buildSkinCSSTemplate } from "@/lib/skinTemplate";
 import { AssistantSettingsCard } from "@/app/settings/AssistantSettingsCard";
 import { GitHubAcceleratorCard } from "@/app/settings/GitHubAcceleratorCard";
+import { GameUdpBypassCard } from "@/app/settings/GameUdpBypassCard";
 
 type TabId = "profile" | "system" | "users" | "appearance" | "update" | "reset";
 type ThemeMode = "light" | "dark" | "system";
@@ -1506,6 +1508,10 @@ function SystemTab({ showToast, isAdmin }: { showToast: (message: string) => voi
             setDraftConfig((current) => ({ ...current, ...patch }));
           }}
         />
+      </Card>
+
+      <Card title="UDP 直连" Icon={Gamepad2}>
+        <GameUdpBypassCard showToast={showToast} />
       </Card>
     </div>
   );

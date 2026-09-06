@@ -731,11 +731,44 @@ func (a *App) handleSettingsPut(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "bad_request", err.Error())
 		return
 	}
+	// setSetting（而非直写 DB）会同步刷新带内存缓存的设置项：
+	// game_udp_bypass_ports 的 nft 渲染只读缓存，直写 DB 会导致改动不生效。
 	for k, value := range raw {
-		v := fmtAny(value)
-		_, _ = a.DB.Exec(`insert or replace into settings(key,value,updated_at) values(?,?,?)`, k, v, nowString())
+		a.setSetting(k, fmtAny(value))
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"success": true})
+	payload := map[string]any{"success": true}
+	_, hitPorts := raw["network.game_udp_bypass_ports"]
+	_, hitToggle := raw["network.china_udp_bypass"]
+	if hitPorts || hitToggle {
+		if err := a.refreshNFTForNetworkSettings(r.Context()); err != nil {
+			payload["nft_refresh_error"] = err.Error()
+		} else {
+			payload["nft_refreshed"] = true
+		}
+	}
+	writeJSON(w, http.StatusOK, payload)
+}
+
+// refreshNFTForNetworkSettings 重渲染并应用 nft，使网络类设置（游戏 UDP
+// 直连端口、国内 UDP 直连开关）的改动即时生效（无需重启服务）。TUN 模式
+// 或非 nft 部署下静默跳过——重启后按已存设置正常渲染。
+func (a *App) refreshNFTForNetworkSettings(ctx context.Context) error {
+	cfg, ok := a.latestSetupConfig()
+	if !ok || isTUNProxyMode(cfg.LinuxProxyMode) || !shouldRestoreNFT(cfg) {
+		return nil
+	}
+	path := filepath.Join(a.DataDir, "configs/network/network.nft")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	if err := os.WriteFile(path, []byte(a.renderNFT(cfg)), 0o644); err != nil {
+		return err
+	}
+	if _, err := a.applyNFT(ctx); err != nil {
+		return err
+	}
+	a.setSetting(nftDesiredKey, "true")
+	return nil
 }
 
 func (a *App) handleSettingsProfileGet(w http.ResponseWriter, r *http.Request) {

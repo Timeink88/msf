@@ -78,6 +78,8 @@ type App struct {
 	mihomoSecretValue       string
 	gameUdpBypassMu         sync.RWMutex
 	gameUdpBypassValue      string
+	chinaUdpBypassMu        sync.RWMutex
+	chinaUdpBypassValue     string
 }
 
 type assistantCancelEntry struct {
@@ -138,6 +140,7 @@ func New(opts Options) (*App, error) {
 	}
 	app.ensureMihomoControllerSecret()
 	app.ensureGameUDPBypassCache()
+	app.ensureChinaUDPBypassCache()
 	app.reconcileMihomoCoreTypeWithBinary()
 	app.cleanupAssistantRuntimeState()
 	_, _ = app.DB.Exec(`delete from settings where key='factory_reset.completed_id'`)

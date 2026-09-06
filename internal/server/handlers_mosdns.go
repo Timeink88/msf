@@ -1978,6 +1978,9 @@ func (a *App) setSetting(key, value string) {
 	if key == "network.game_udp_bypass_ports" {
 		a.setCachedGameUDPBypassPorts(value)
 	}
+	if key == "network.china_udp_bypass" {
+		a.setCachedChinaUDPBypass(value)
+	}
 }
 
 func (a *App) jsonSetting(key string, fallback any) any {
