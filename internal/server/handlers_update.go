@@ -266,7 +266,7 @@ func (a *App) selfUpdateState() map[string]any {
 				item["can_install"] = true
 			}
 		}
-		if latest != "" && !versionDifferent(a.Version, latest) && oneOf(status, "installing", "restarting", "downloaded", "checked") {
+		if latest != "" && !versionDifferent(a.Version, latest) && !devUpdateSuppressed(a.Version, latest) && oneOf(status, "installing", "restarting", "downloaded", "checked") {
 			item["current_version"] = a.Version
 			item["has_update"] = false
 			item["status"] = "completed"
@@ -305,6 +305,9 @@ func (a *App) handleUpdateCheck(w http.ResponseWriter, r *http.Request) {
 		phase = "ready"
 		message = "检测到新版本可用"
 		eventMessage = "检测到新版本 " + release.TagName
+	} else if devUpdateSuppressed(a.Version, release.TagName) {
+		message = "检测到新版本 " + release.TagName + "，当前为开发版本（" + a.Version + "），已禁用在线更新"
+		eventMessage = message
 	}
 	_ = a.ensureSelfUpdateInfoRow()
 	_, _ = a.DB.Exec(`update update_info set current_version=?,latest_version=?,has_update=?,status='checked',phase=?,progress=0,message=?,error_message='',download_url=?,release_notes=?,last_check_time=?,updated_at=? where component='msf'`,
@@ -1692,6 +1695,20 @@ func versionDifferent(current, latest string) bool {
 	current = strings.TrimPrefix(strings.TrimSpace(strings.ToLower(current)), "v")
 	latest = strings.TrimPrefix(strings.TrimSpace(strings.ToLower(latest)), "v")
 	return current != "" && latest != "" && current != latest && !strings.Contains(current, latest) && !strings.Contains(current, "dev")
+}
+
+// devUpdateSuppressed reports whether a newer release exists but self-update
+// is held back because the running build identifies itself as a development
+// build (for example the untagged "0.1.0-dev" produced by a plain `go
+// build`). The updater keeps that protection, but the UI must neither claim
+// "already latest" nor "completed" while a release is actually newer.
+func devUpdateSuppressed(current, latest string) bool {
+	current = strings.TrimPrefix(strings.TrimSpace(strings.ToLower(current)), "v")
+	latest = strings.TrimPrefix(strings.TrimSpace(strings.ToLower(latest)), "v")
+	if current == "" || latest == "" || !strings.Contains(current, "dev") {
+		return false
+	}
+	return current != latest && !strings.Contains(current, latest)
 }
 
 // mihomoCoreSwitchResult is the response payload for a Mihomo core switch.

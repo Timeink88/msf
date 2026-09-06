@@ -19,6 +19,7 @@
 
 - 修复 cloudflareredirect 包的 Windows 交叉编译：进程组设置按平台拆分（Setpgid）。
 - 修复 smart 内核资源校验测试在部分文件系统上因 mtime 粒度不足产生的间歇性失败。
+- 修复开发版本（如未注入版本号编译出的 0.1.0-dev）检查更新时的误导性提示：此前会谎报"已是最新版本"、更新状态甚至显示"更新完成"，而实际存在更新只是按保护策略禁用了自更新；现在会如实提示"检测到新版本 vX，当前为开发版本，已禁用在线更新"。
 
 #### 外观与皮肤系统
 
@@ -100,6 +101,12 @@
   process-group setup split per platform (Setpgid).
 - Fixed intermittent smart-core resource verification test failures caused
   by insufficient mtime granularity on some filesystems.
+- Fixed misleading update-check results on development builds (e.g. the
+  untagged "0.1.0-dev" from a plain `go build`): the check used to claim
+  "already latest" (and the status card even showed "completed") while a
+  newer release existed and self-update was merely held back by design.
+  It now honestly reports "new version detected; self-update is disabled
+  on development builds".
 
 #### Appearance & skin system
 
