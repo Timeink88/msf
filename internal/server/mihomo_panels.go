@@ -307,10 +307,17 @@ func (a *App) mihomoControllerURL(path string) string {
 }
 
 func (a *App) mihomoSecret() string {
-	if secret := a.setting("mihomo_controller_secret", ""); secret != "" {
+	// The active config is the source of truth.  injectMihomoControllerSecret
+	// keeps user-provided secrets untouched, so a config that carries one must
+	// also make MSF (and the zashboard preset) authenticate with it — reading
+	// the generated DB value first locked out the controller whenever the two
+	// differed.  The generated secret is injected into every secret-less
+	// config, so the DB fallback only fires for pre-hardening files and
+	// deliberately empty secrets.
+	if secret := stringMapValue(a.mihomoConfigMap(), "secret"); secret != "" {
 		return secret
 	}
-	return stringMapValue(a.mihomoConfigMap(), "secret")
+	return a.setting("mihomo_controller_secret", "")
 }
 
 func (a *App) mihomoControllerJSON(method, path string, body []byte) (any, bool, error) {
