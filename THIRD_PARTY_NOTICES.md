@@ -21,9 +21,25 @@ MSF 自有代码按照 GNU GPL v3.0 发布。下列已经标明的第三方代�
 | Optional browser download of DB-IP City Lite | DB-IP | User-consented IP geolocation | CC BY 4.0 |
 | `logo_motion_mizar/**` and active Mizar exports | MSF maintainer prompt and selection, Codex image generation, nolangz/pixel2motion motion conversion | MSF identity and motion assets | Project brand policy; pixel2motion tool is MIT |
 | `web/src/components/assistant/orb/vendor/ler-sent001-orb/**`, `web/src/assets/assistant/ler-sent001-orb-poster.png` | [LerSent001/orb](https://github.com/LerSent001/orb) `fbf6eb8` | Liquid glass orb WGSL shader, presets, uniform mapping, WebGPU renderer, generated WebGL2 shader backend and static poster fallback adapted for the administrator assistant | MIT; Copyright (c) 2026 LerSent001 |
+| `internal/server/runtime_templates/network/chnroute_v4.txt`, `chnroute_v6.txt` | CN allocation snapshots (2026-09-05, 6233 v4 / 3395 v6 entries) of APNIC-registered CN address space, cross-verified 2026-09-07 against community daily lists [Rabbit-Spec/Surge](https://github.com/Rabbit-Spec/Surge) `Rules/ChinaCIDR.list` and [Repcz/Tool](https://github.com/Repcz/Tool) `Rules/ChinaIP.list` | nftables CN UDP bypass interval sets (`chinaUDPBypassElements`) | Factual public registry data (IP allocations); the community repos publish the same data without an explicit data license |
 
 The complete MIT notice for the vendored orb source is preserved in
 [`docs/third-party/ler-sent001-orb-mit.txt`](docs/third-party/ler-sent001-orb-mit.txt).
+
+### CN CIDR snapshots (`chnroute_v4.txt` / `chnroute_v6.txt`)
+
+The two snapshots hold CN IPv4/IPv6 address space as registered in the public
+APNIC delegation data, at registry-native aggregation granularity. They were
+cross-verified on 2026-09-07 against two independently maintained community
+lists that regenerate daily from the same registry data: the v6 snapshot is
+line-for-line identical to both, and the v4 snapshot differs from
+Rabbit-Spec/Surge's edition only where that list aggregates neighbouring
+prefixes further (e.g. `117.134.208.0/20` vs the registry-native
+`/23+/23+/21` split) or where allocations were added after the snapshot date.
+IP address allocations are factual registry data; the file headers record the
+snapshot date and verification references. The runtime loader skips `#`
+comment lines, and a runtime copy under `configs/network/` overrides the
+embedded snapshot.
 
 [`baozaodetudou/mssb`](https://github.com/baozaodetudou/mssb) was an early
 publicly accessible functional reference for the combined MosDNS + Mihomo

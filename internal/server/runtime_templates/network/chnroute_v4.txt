@@ -1,3 +1,10 @@
+# CN IPv4 CIDR 快照：6233 条，快照日期 2026-09-05。
+# 内容为公共注册表分配事实（APNIC 注册的 CN 地址段，保留原生聚合粒度）。
+# 2026-09-07 交叉验证：与社区日更清单 Rabbit-Spec/Surge Rules/ChinaCIDR.list
+# 内容一致（差异仅为对端的进一步聚合与快照日后新增的分配段）。
+# 加载器（chinaUDPBypassElements）跳过 # 注释与空行；运行时数据文件
+# configs/network/chnroute_v4.txt 优先于本内嵌快照。
+# 来源记录与许可说明见 THIRD_PARTY_NOTICES.md。
 1.0.1.0/24
 1.0.2.0/23
 1.0.8.0/21

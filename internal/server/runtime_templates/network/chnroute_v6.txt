@@ -1,3 +1,10 @@
+# CN IPv6 CIDR 快照：3395 条，快照日期 2026-09-05。
+# 内容为公共注册表分配事实（APNIC 注册的 CN 地址段，保留原生聚合粒度）。
+# 2026-09-07 交叉验证：与 Repcz/Tool Rules/ChinaIP.list 及
+# Rabbit-Spec/Surge Rules/ChinaCIDR.list 的 v6 段逐条一致。
+# 加载器（chinaUDPBypassElements）跳过 # 注释与空行；运行时数据文件
+# configs/network/chnroute_v6.txt 优先于本内嵌快照。
+# 来源记录与许可说明见 THIRD_PARTY_NOTICES.md。
 2001:250::/30
 2001:254::/33
 2001:255::/32

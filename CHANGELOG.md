@@ -4,6 +4,19 @@
 
 ### 中文
 
+#### PR review 修复（合并阻断项）
+
+- 供应链加固：GitHub Release 元数据（下载地址与 SHA-256 摘要的共同来源）不再经公共加速镜像获取——恶意镜像无法同时伪造地址、二进制与匹配摘要骗过校验；元数据仅走 Token / 运营商代理 / 直连三条可信通道，镜像只承担已获可信摘要的资产字节下载；资产 URL 强制校验为 https://github.com 发布资产，自更新使用历史存储地址前同样校验。
+- 修复前端锁文件与 package.json 脱节（React 19.2.8 vs 19.2.6）：干净构建（npm ci）此前必然失败。
+- 修复 MosDNS 本地保留 TLD 误杀正常域名：`keyword:.lan/.local` 是子串匹配，会拒答 www.lancome.com、example.land 等；改为 `domain:` 锚定（仅匹配该 TLD 及其子域）。
+- 修复自定义 Mihomo 控制器 secret 导致 MSF 与 Zashboard 整体失联：活动配置中用户自带的 secret 现在真正优先于自动生成值（此前自动注入对自带 secret 的配置不生效，而请求仍读生成值，两者不一致即 401）。
+- 修复 DNS 测速把秒回 SERVFAIL/REFUSED 的上游评为低延迟可用：响应校验现在要求 RCODE 终态（NOERROR/NXDOMAIN），存在域还必须有答案记录，防止初始化后 DNS 无法解析。
+- 权限收敛：全局自定义 CSS 写入从所有非 guest 角色收紧为仅管理员（外观其余字段行为不变）——CSS 可改写任何人看到的界面元素。
+- 凭据不再经通用设置接口原样回显：github_token 与 mihomo_controller_secret 在 GET /api/v1/settings 中掩码（写入仍走专用端点）。
+- gzip 协商尊重 q 值（gzip;q=0 / *;q=0 不再拿到压缩体），所有响应补齐 Vary: Accept-Encoding，共享缓存不再存错表示。
+- 内嵌 CN CIDR 快照补齐可追溯来源：文件头注明快照日期、公共注册表数据属性及与社区日更清单（Rabbit-Spec/Surge、Repcz/Tool）的交叉验证结论，THIRD_PARTY_NOTICES.md 增设条目。
+- 变更范围内的 Go 文件全部通过 gofmt。
+
 #### 国内 UDP 内核直连（游戏断线的根治性方案）
 
 - 新增「国内 UDP 直连」能力（默认开启）：目的地为国内 IP 的 UDP 流量在 nftables 内核层直接放行、不再经过代理隧道——所有国服游戏零配置免受代理隧道 60 秒 UDP 会话空闲超时导致的周期性断线影响；同时卸载了代理核心的国内 UDP 会话负担。CN IP 段内置随二进制分发（IPv4 6233 段 / IPv6 3395 段），支持运行时数据文件覆盖以便后续经组件更新通道刷新。
@@ -58,6 +71,44 @@
 - **MosDNS 国内上游默认改为阿里 IP 直连 DoH**：aliapi 插件对裸 IP 上游存在挂起问题，DoH 形式更稳；如需改回可在面板 DNS 上游设置中编辑。
 
 ### English
+
+#### PR review fixes (merge blockers)
+
+- Supply-chain hardening: GitHub Release metadata — the common origin of both
+  download URLs and SHA-256 digests — is no longer fetched through public
+  accelerator mirrors, so a hostile mirror can no longer forge a matching
+  URL/binary/digest triple that passes verification. Metadata only travels
+  over trusted routes (token / operator proxy / direct); mirrors serve
+  nothing but asset bytes whose digests were obtained on a trusted channel.
+  Asset URLs are validated as https://github.com release downloads, and the
+  self-updater validates its stored URL the same way before downloading.
+- Fixed web/package-lock.json lagging package.json (React 19.2.8 vs 19.2.6):
+  clean builds (npm ci) previously failed outright.
+- Fixed MosDNS reserved-TLD rules breaking legitimate domains: keyword:.lan /
+  .local are substring matches and rejected www.lancome.com / example.land;
+  they now use domain: anchoring (the TLD and its subdomains only).
+- Fixed custom Mihomo controller secrets locking MSF and Zashboard out of the
+  controller: a user-provided secret in the active config now actually wins
+  over the auto-generated value (injection skipped user secrets while
+  requests still read the generated one — any mismatch meant 401s).
+- Fixed the DNS benchmark scoring instant-SERVFAIL/REFUSED upstreams as
+  fast-and-usable: responses now require a terminal RCODE (NOERROR/NXDOMAIN)
+  and, for existing domains, at least one answer record — preventing
+  post-setup resolution outages.
+- Permission tightening: writing the global custom CSS now requires the
+  admin role (other appearance fields unchanged for non-guest users) — CSS
+  can rewrite the UI every user, including admins, sees.
+- Credentials are no longer echoed raw through the generic settings API:
+  github_token and mihomo_controller_secret are masked in
+  GET /api/v1/settings (dedicated endpoints still manage writes).
+- gzip negotiation now honors q values (gzip;q=0 / *;q=0 no longer receive
+  compressed bodies) and every response carries Vary: Accept-Encoding so
+  shared caches stop mixing representations.
+- The embedded CN CIDR snapshots now carry reproducible provenance: file
+  headers record the snapshot date, the factual-registry nature of the data,
+  and cross-verification against community daily lists (Rabbit-Spec/Surge,
+  Repcz/Tool); THIRD_PARTY_NOTICES.md gained a dedicated entry.
+- All Go files touched by this change set pass gofmt.
 
 #### Kernel-level CN UDP bypass (root fix for game disconnects)
 

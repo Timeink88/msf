@@ -165,34 +165,34 @@ func (sm *ServiceManager) Start(ctx context.Context, name string) (ServiceStatus
 		stdout.Close()
 		stderr.Close()
 		close(waitDone)
-	sm.mu.Lock()
-	if sm.procs[name] == cmd {
-		delete(sm.procs, name)
-	}
-	delete(sm.startedAt, name)
-	removePIDFileIfMatches(spec.PIDFile, cmd.Process.Pid)
-	// A death while the service is still desired (service.<name>.enabled)
-	// and not part of a deliberate stop is an accident: pkill, OOM, kernel
-	// panic of the child — revive it with backoff.  Stop/Restart/StopAll mark
-	// deliberateStop first (StopAll keeps the desired state "true" on
-	// purpose, so desired alone cannot make this call).  Backoff resets only
-	// after a process survived autoRestartStableUptime — quick successive
-	// deaths keep the escalated interval from the previous loop.
-	deliberate := sm.deliberateStop[name]
-	delete(sm.deliberateStop, name)
-	revive := !deliberate && sm.app.setting(serviceDesiredKey(name), "") == "true"
-	if !revive || time.Since(startedAt) >= autoRestartStableUptime {
-		sm.lastBackoff[name] = 0
-	}
-	alreadyLooping := sm.restartLoops[name]
-	if revive && !alreadyLooping {
-		sm.restartLoops[name] = true
-	}
-	sm.mu.Unlock()
-	if revive && !alreadyLooping {
-		go sm.autoRestartLoop(name)
-	}
-}()
+		sm.mu.Lock()
+		if sm.procs[name] == cmd {
+			delete(sm.procs, name)
+		}
+		delete(sm.startedAt, name)
+		removePIDFileIfMatches(spec.PIDFile, cmd.Process.Pid)
+		// A death while the service is still desired (service.<name>.enabled)
+		// and not part of a deliberate stop is an accident: pkill, OOM, kernel
+		// panic of the child — revive it with backoff.  Stop/Restart/StopAll mark
+		// deliberateStop first (StopAll keeps the desired state "true" on
+		// purpose, so desired alone cannot make this call).  Backoff resets only
+		// after a process survived autoRestartStableUptime — quick successive
+		// deaths keep the escalated interval from the previous loop.
+		deliberate := sm.deliberateStop[name]
+		delete(sm.deliberateStop, name)
+		revive := !deliberate && sm.app.setting(serviceDesiredKey(name), "") == "true"
+		if !revive || time.Since(startedAt) >= autoRestartStableUptime {
+			sm.lastBackoff[name] = 0
+		}
+		alreadyLooping := sm.restartLoops[name]
+		if revive && !alreadyLooping {
+			sm.restartLoops[name] = true
+		}
+		sm.mu.Unlock()
+		if revive && !alreadyLooping {
+			go sm.autoRestartLoop(name)
+		}
+	}()
 	timer := time.NewTimer(300 * time.Millisecond)
 	exitedDuringStartup := false
 	select {
