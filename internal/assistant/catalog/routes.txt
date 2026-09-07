@@ -230,7 +230,6 @@ POST /api/v1/config/upload
 POST /api/v1/config/validate
 POST /api/v1/daemon/restart
 POST /api/v1/daemon/stop
-POST /api/v1/github/accelerators/probe
 POST /api/v1/history
 POST /api/v1/history/{id}/rollback
 POST /api/v1/history/{id}/star

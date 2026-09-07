@@ -81,8 +81,6 @@ type App struct {
 	gameUdpBypassValue      string
 	chinaUdpBypassMu        sync.RWMutex
 	chinaUdpBypassValue     string
-	accelerators            *acceleratorManager
-	acceleratorPrefixes     []string
 	githubAPIBaseURL        string
 	dnsBenchmarkMu          sync.Mutex
 	dnsBenchmarkRunning     bool
@@ -132,8 +130,6 @@ func New(opts Options) (*App, error) {
 		assistantCancels:      make(map[string]assistantCancelEntry),
 		smartResourceJobs:     make(map[string]smartResourceState),
 		smartResourceCancels:  make(map[string]smartResourceCancelEntry),
-		accelerators:          &acceleratorManager{},
-		acceleratorPrefixes:   append([]string(nil), builtinGitHubAcceleratorPrefixes...),
 		githubAPIBaseURL:      "https://api.github.com",
 	}
 	if request, ok, readErr := readFactoryResetRequest(opts.DataDir); readErr == nil && ok {
@@ -434,7 +430,6 @@ func (a *App) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v1/system/startup-issues", a.handleStartupIssues)
 	mux.HandleFunc("GET /api/v1/github/accelerators", a.handleGitHubAccelerators)
 	mux.HandleFunc("PUT /api/v1/github/accelerators", a.handleGitHubAccelerators)
-	mux.HandleFunc("POST /api/v1/github/accelerators/probe", a.handleGitHubAccelerators)
 	mux.HandleFunc("GET /api/v1/network/info", a.handleNetworkInfo)
 	a.registerNetworkRuntimeRoutes(mux)
 	mux.HandleFunc("POST /api/v1/network/apply", a.handleNFTApply)

@@ -560,63 +560,7 @@ func (a *App) downloadVerifiedFile(rawURL, expectedDigest, dest string, emit fun
 }
 
 func (a *App) downloadVerifiedFileContext(ctx context.Context, rawURL, expectedDigest, dest string, emit func(DownloadEvent)) (string, error) {
-	first := a.githubDownloadRoute(rawURL)
-	digest, err := a.downloadVerifiedRouteContext(ctx, first, expectedDigest, dest, emit)
-	if err == nil || !isGitHubDownloadURL(rawURL) {
-		return digest, err
-	}
-	// GitHub download failed on the chosen route (dead accelerator, or the
-	// proxy path itself is broken).  Invalidate the loser and walk the
-	// fallback queue before giving up — incident B died exactly here.
-	if prefix := acceleratorPrefixOf(first.URL, rawURL); prefix != "" {
-		a.markAcceleratorFailure(prefix)
-	}
-	for _, retry := range a.githubFallbackRoutes(ctx, rawURL, first) {
-		if emit != nil {
-			emit(DownloadEvent{Status: "running", Message: "下载路由失败，切换线路重试: " + retry.URL})
-		}
-		if d, err2 := a.downloadVerifiedRouteContext(ctx, retry, expectedDigest, dest, emit); err2 == nil {
-			return d, nil
-		}
-	}
-	return digest, err
-}
-
-// githubFallbackRoutes builds the retry queue after a failed route: the
-// runner-up accelerator (direct) first, then the raw GitHub URL on the
-// proxy/direct line.  Already-tried URLs are skipped; ctx is honoured so a
-// cancelled download never blocks on a synchronous probe round.
-func (a *App) githubFallbackRoutes(ctx context.Context, raw string, failed githubRoute) []githubRoute {
-	if a.acceleratorMode() == "off" || ctx.Err() != nil {
-		return nil
-	}
-	seen := map[string]bool{failed.URL: true}
-	routes := []githubRoute{}
-	if prefix := a.manualAcceleratorPrefix(); prefix != "" {
-		if u := prefix + "/" + raw; !seen[u] {
-			routes = append(routes, githubRoute{URL: u, Direct: true})
-			seen[u] = true
-		}
-	} else if prefix := a.refreshAcceleratorSnapshot(ctx).Best; prefix != "" {
-		if u := prefix + "/" + raw; !seen[u] {
-			routes = append(routes, githubRoute{URL: u, Direct: true})
-			seen[u] = true
-		}
-	}
-	if !seen[raw] {
-		routes = append(routes, githubRoute{URL: raw})
-	}
-	return routes
-}
-
-// acceleratorPrefixOf extracts the accelerator prefix from a routed URL, or
-// "" when the URL went direct/proxied.
-func acceleratorPrefixOf(routed, raw string) string {
-	trimmed := strings.TrimSuffix(routed, raw)
-	if trimmed != "" && strings.HasSuffix(trimmed, "/") && (strings.HasPrefix(trimmed, "https://") || strings.HasPrefix(trimmed, "http://")) {
-		return strings.TrimSuffix(trimmed, "/")
-	}
-	return ""
+	return a.downloadVerifiedRouteContext(ctx, a.githubDownloadRoute(rawURL), expectedDigest, dest, emit)
 }
 
 func (a *App) downloadVerifiedResolvedURLContext(ctx context.Context, finalURL, expectedDigest, dest string, emit func(DownloadEvent)) (string, error) {
@@ -680,9 +624,9 @@ func (a *App) downloadHTTPClient() *http.Client {
 }
 
 // downloadHTTPClientFor builds the HTTP client for a resolved route.
-// Accelerator routes go Direct: a domestic mirror must not detour through
-// the proxy egress — that would waste the acceleration and couple the
-// mirror's availability to the proxy's.
+// A manually configured accelerator route goes direct: if the operator also
+// enabled an explicit proxy, githubDownloadRoute keeps the official URL and
+// selects the proxy path before this function is called.
 func (a *App) downloadHTTPClientFor(route githubRoute) *http.Client {
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	if !route.Direct && a != nil && a.DB != nil {
@@ -736,19 +680,17 @@ func (a *App) downloadProxyURL() *url.URL {
 	return u
 }
 
-// githubRoute is a resolved GitHub route: the final URL plus whether the
-// HTTP client must bypass proxies. Accelerator mirrors are domestic and are
-// always fetched Direct.
+// githubRoute is a resolved GitHub route: the final URL plus whether the HTTP
+// client must bypass proxies. A manually configured accelerator is fetched
+// directly so it is not nested inside a second proxy route.
 type githubRoute struct {
 	URL    string
 	Direct bool
 }
 
-// githubDownloadRoute resolves the routing order for a GitHub URL.
-// Operator-intent first: an explicit download proxy wins over everything.
-// Otherwise the probed accelerator mirror comes BEFORE the running Mihomo
-// data plane (mirror-first policy) and goes direct; when no mirror is live,
-// traffic falls back to the proxy/direct line against GitHub itself.
+// githubDownloadRoute resolves only operator-configured routing for a GitHub
+// URL. An explicit proxy wins; otherwise the exact manually saved accelerator
+// prefix is used. MSF never supplies, probes, ranks, or switches mirrors.
 func (a *App) githubDownloadRoute(raw string) githubRoute {
 	if a == nil || a.DB == nil || !isGitHubDownloadURL(raw) {
 		return githubRoute{URL: raw}
@@ -756,7 +698,7 @@ func (a *App) githubDownloadRoute(raw string) githubRoute {
 	if a.downloadProxyURL() != nil {
 		return githubRoute{URL: raw}
 	}
-	if prefix := a.bestGitHubAccelerator(); prefix != "" {
+	if prefix := a.manualAcceleratorPrefix(); prefix != "" {
 		return githubRoute{URL: prefix + "/" + raw, Direct: true}
 	}
 	return githubRoute{URL: raw}

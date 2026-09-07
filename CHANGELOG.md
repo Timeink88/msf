@@ -31,7 +31,7 @@
 
 #### GitHub 下载可靠性与 Token
 
-- GitHub Release 元数据始终通过 GitHub 官方 TLS 端点获取；公共镜像只承载已从可信元数据取得 SHA-256 摘要的资产文件。支持加密保存个人 Token、下载失败自动换线路，以及加速器状态卡与限流提示。
+- GitHub Release 元数据始终通过 GitHub 官方 TLS 端点获取；资产下载只使用管理员主动填写的代理服务器或加速镜像源，系统不再内置、探测、排序或自动切换公共镜像。个人 Token 继续加密保存，资产仍需通过可信 SHA-256 校验。
 
 #### 性能优化（速赢包）
 
@@ -128,7 +128,7 @@
 
 #### GitHub download reliability & tokens
 
-- GitHub Release metadata always comes from the official TLS endpoint; public mirrors carry only assets whose SHA-256 digest was obtained independently from trusted metadata. Personal tokens are encrypted at rest and never traverse public mirrors; automatic line switching, accelerator status, and rate-limit guidance remain available.
+- GitHub Release metadata always comes from the official TLS endpoint. Asset downloads use only an administrator-supplied proxy or accelerator prefix; MSF no longer bundles, probes, ranks, or automatically switches public mirrors. Personal tokens remain encrypted at rest, and assets still require a trusted SHA-256 digest.
 
 #### Performance quick wins
 

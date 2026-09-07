@@ -6,100 +6,67 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
 
-// mirrorFixture is an httptest accelerator that can answer probes (OK) and
-// API forwards (OK or a 403 rate-limit rejection) independently.
-type mirrorFixture struct {
-	server    *httptest.Server
-	apiHits   int
-	probeHits int
-	rejectAPI bool
-	delay     time.Duration
-}
-
-func newMirrorFixture(t *testing.T, rejectAPI bool, delay time.Duration) *mirrorFixture {
+func setManualAcceleratorForTest(t *testing.T, app *App, prefix string) {
 	t.Helper()
-	m := &mirrorFixture{rejectAPI: rejectAPI, delay: delay}
-	m.server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		uri := r.RequestURI
-		if strings.Contains(uri, "api.github.com") {
-			m.apiHits++
-			if m.rejectAPI {
-				w.Header().Set("Content-Type", "application/json")
-				w.WriteHeader(http.StatusForbidden)
-				_, _ = w.Write([]byte(`{"message":"API rate limit exceeded for 1.2.3.4.","documentation_url":"https://docs.github.com"}`))
-				return
-			}
-			w.Header().Set("Content-Type", "application/json")
-			_, _ = w.Write([]byte(`{"tag_name":"v9.9.9"}`))
-			return
-		}
-		m.probeHits++
-		if m.delay > 0 {
-			time.Sleep(m.delay)
-		}
-		_, _ = w.Write([]byte(strings.Repeat("probe-body-", 40)))
-	}))
-	t.Cleanup(m.server.Close)
-	return m
-}
-
-func withTestAcceleratorPool(t *testing.T, prefixes ...string) {
-	t.Helper()
-	original := builtinGitHubAcceleratorPrefixes
-	resetAcceleratorManagerForTest(prefixes)
-	t.Cleanup(func() { resetAcceleratorManagerForTest(original) })
-}
-
-func TestGitHubJSONMetadataNeverTransitsMirror(t *testing.T) {
-	mirror := newMirrorFixture(t, false, 0)
-	withTestAcceleratorPool(t, mirror.server.URL)
-	app := newTestApp(t)
-	if snapshot := app.refreshAcceleratorSnapshot(context.Background()); snapshot.Best != mirror.server.URL {
-		t.Fatalf("probe winner = %q (results: %#v)", snapshot.Best, snapshot.Results)
+	prefix = strings.TrimRight(strings.TrimSpace(prefix), "/")
+	result, err := app.DB.Exec(`update system_setups set github_accelerator_enabled=?,github_accelerator_url=?`, prefix != "", prefix)
+	if err != nil {
+		t.Fatal(err)
 	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rows > 0 {
+		return
+	}
+	now := time.Now()
+	if _, err := app.DB.Exec(`insert into system_setups(created_at,updated_at,username,github_accelerator_enabled,github_accelerator_url,is_initialized) values(?,?,?,?,?,true)`, now, now, "root", prefix != "", prefix); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestGitHubMetadataNeverTransitsConfiguredAccelerator(t *testing.T) {
+	var mirrorHits atomic.Int32
+	mirror := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		mirrorHits.Add(1)
+	}))
+	defer mirror.Close()
+
+	app := newTestApp(t)
+	setManualAcceleratorForTest(t, app, mirror.URL)
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	var release githubRelease
 	_ = app.fetchGitHubJSONContext(ctx, "https://api.github.com/repos/scoltzero/msf/releases/latest", &release)
-	if mirror.apiHits != 0 {
-		t.Fatalf("release metadata transited the public mirror %d times", mirror.apiHits)
+	if got := mirrorHits.Load(); got != 0 {
+		t.Fatalf("release metadata transited the configured accelerator %d times", got)
 	}
 }
 
-func TestGitHubJSONTokenNeverTransitsMirror(t *testing.T) {
-	mirror := newMirrorFixture(t, false, 0)
-	withTestAcceleratorPool(t, mirror.server.URL)
+func TestGitHubTokenNeverTransitsConfiguredAccelerator(t *testing.T) {
+	var mirrorHits atomic.Int32
+	mirror := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		mirrorHits.Add(1)
+	}))
+	defer mirror.Close()
+
 	app := newTestApp(t)
+	setManualAcceleratorForTest(t, app, mirror.URL)
 	if err := app.saveGitHubToken("ghp_token1234567890abcdef"); err != nil {
 		t.Fatal(err)
 	}
-
-	// Cancelled context: the request itself fails immediately, but the
-	// routing decision is still observable — the mirror must never be hit.
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	var release githubRelease
 	_ = app.fetchGitHubJSONContext(ctx, "https://api.github.com/repos/scoltzero/msf/releases/latest", &release)
-	if mirror.apiHits != 0 {
-		t.Fatalf("tokened request transited the public mirror %d times", mirror.apiHits)
-	}
-}
-
-func TestGitHubAcceleratorOffModeDoesNotProbe(t *testing.T) {
-	mirror := newMirrorFixture(t, false, 0)
-	withTestAcceleratorPool(t, mirror.server.URL)
-	app := newTestApp(t)
-	app.setSetting(settingAcceleratorMode, "off")
-	snapshot := app.refreshAcceleratorSnapshot(context.Background())
-	if snapshot.Mode != "off" || snapshot.Best != "" || len(snapshot.Results) != 0 {
-		t.Fatalf("off-mode snapshot = %#v", snapshot)
-	}
-	if mirror.probeHits != 0 {
-		t.Fatalf("off mode probed public accelerators %d times", mirror.probeHits)
+	if got := mirrorHits.Load(); got != 0 {
+		t.Fatalf("tokened metadata request transited the configured accelerator %d times", got)
 	}
 }
 
@@ -117,7 +84,6 @@ func TestGitHubJSONTokenSendsBearer(t *testing.T) {
 		t.Fatal(err)
 	}
 	var release githubRelease
-	// Non-GitHub host: routed verbatim, so the httptest URL is reachable.
 	if err := app.fetchGitHubJSONOnce(context.Background(), server.URL, false, "ghp_token1234567890abcdef", &release, "token"); err != nil {
 		t.Fatal(err)
 	}
@@ -126,46 +92,46 @@ func TestGitHubJSONTokenSendsBearer(t *testing.T) {
 	}
 }
 
-func TestGitHubAcceleratorsPUTAndMaskedToken(t *testing.T) {
-	withTestAcceleratorPool(t) // empty pool: no outbound probes during GET
+func TestGitHubAccessPUTStoresOnlyManualConfigurationAndMaskedToken(t *testing.T) {
 	app := newTestApp(t)
+	setManualAcceleratorForTest(t, app, "")
 	token := tokenForRole(t, app, "admin")
 
 	res := requestJSON(t, app, http.MethodPut, "/api/v1/github/accelerators", token, map[string]any{
-		"mode":           "manual",
-		"extra_prefixes": []string{"https://mirror.a.example", "https://mirror.b.example"},
-		"github_token":   "ghp_token1234567890abcdef",
+		"manual_prefix": "https://mirror.example/",
+		"github_token":  "ghp_token1234567890abcdef",
 	})
 	if res.Code != http.StatusOK || !strings.Contains(res.Body.String(), `"success":true`) {
-		t.Fatalf("PUT accelerators failed: status=%d body=%s", res.Code, res.Body.String())
+		t.Fatalf("PUT GitHub access settings failed: status=%d body=%s", res.Code, res.Body.String())
 	}
 
 	res = requestJSON(t, app, http.MethodGet, "/api/v1/github/accelerators", token, nil)
 	if res.Code != http.StatusOK {
-		t.Fatalf("GET accelerators failed: status=%d", res.Code)
+		t.Fatalf("GET GitHub access settings failed: status=%d", res.Code)
 	}
 	var payload struct {
 		Success bool `json:"success"`
 		Data    struct {
-			Mode              string   `json:"mode"`
-			ExtraPrefixes     []string `json:"extra_prefixes"`
-			GitHubTokenMasked string   `json:"github_token_masked"`
+			ManualPrefix      string `json:"manual_prefix"`
+			GitHubTokenMasked string `json:"github_token_masked"`
 		} `json:"data"`
 	}
 	if err := json.Unmarshal(res.Body.Bytes(), &payload); err != nil {
 		t.Fatal(err)
 	}
-	if payload.Data.Mode != "manual" {
-		t.Fatalf("mode = %q, want manual", payload.Data.Mode)
-	}
-	if len(payload.Data.ExtraPrefixes) != 2 || payload.Data.ExtraPrefixes[0] != "https://mirror.a.example" {
-		t.Fatalf("extra_prefixes = %#v", payload.Data.ExtraPrefixes)
+	if payload.Data.ManualPrefix != "https://mirror.example" {
+		t.Fatalf("manual prefix = %q", payload.Data.ManualPrefix)
 	}
 	if payload.Data.GitHubTokenMasked != "ghp_******cdef" {
 		t.Fatalf("masked token = %q", payload.Data.GitHubTokenMasked)
 	}
+	for _, removedField := range []string{"best_prefix", "extra_prefixes", "probed_at", "results"} {
+		if strings.Contains(res.Body.String(), `"`+removedField+`"`) {
+			t.Fatalf("automatic accelerator field %q remained in response: %s", removedField, res.Body.String())
+		}
+	}
 	if full := res.Body.String(); strings.Contains(full, "ghp_token1234567890abcdef") {
-		t.Fatal("raw token leaked through the accelerators endpoint")
+		t.Fatal("raw token leaked through the GitHub access endpoint")
 	}
 	var legacyCount int
 	if err := app.DB.QueryRow(`select count(*) from settings where key=?`, settingGitHubToken).Scan(&legacyCount); err != nil || legacyCount != 0 {
@@ -175,9 +141,10 @@ func TestGitHubAcceleratorsPUTAndMaskedToken(t *testing.T) {
 	if err := app.DB.QueryRow(`select value from settings where key=?`, settingGitHubTokenCiphertext).Scan(&encrypted); err != nil || encrypted == "" || strings.Contains(encrypted, "ghp_token") {
 		t.Fatalf("encrypted GitHub token storage invalid: value=%q err=%v", encrypted, err)
 	}
-	settings := requestJSON(t, app, http.MethodGet, "/api/v1/settings", token, nil)
-	if body := settings.Body.String(); strings.Contains(body, "ghp_token1234567890abcdef") || strings.Contains(body, settingGitHubTokenCiphertext) || strings.Contains(body, settingGitHubTokenNonce) {
-		t.Fatalf("generic settings response exposed GitHub token material: %s", body)
+
+	invalid := requestJSON(t, app, http.MethodPut, "/api/v1/github/accelerators", token, map[string]any{"manual_prefix": "ftp://mirror.example"})
+	if invalid.Code != http.StatusBadRequest {
+		t.Fatalf("non-HTTP manual prefix must 400, got %d: %s", invalid.Code, invalid.Body.String())
 	}
 
 	res = requestJSON(t, app, http.MethodPut, "/api/v1/github/accelerators", token, map[string]any{"reset_token": true})
@@ -187,10 +154,36 @@ func TestGitHubAcceleratorsPUTAndMaskedToken(t *testing.T) {
 	if masked := maskGitHubToken(app.githubToken()); masked != "" {
 		t.Fatalf("token not cleared: %q", masked)
 	}
+}
 
-	res = requestJSON(t, app, http.MethodPut, "/api/v1/github/accelerators", token, map[string]any{"mode": "bogus"})
-	if res.Code != http.StatusBadRequest {
-		t.Fatalf("bogus mode must 400, got %d", res.Code)
+func TestOnlyExplicitProxyOrAcceleratorChangesDownloadRoute(t *testing.T) {
+	app := newTestApp(t)
+	setManualAcceleratorForTest(t, app, "")
+	const raw = "https://github.com/example/project/releases/download/v1/archive.tar.gz"
+
+	// Settings left by the removed automatic-probing implementation are inert.
+	app.setSetting("github_accelerator_mode", "auto")
+	app.setSetting("github_accelerator_extra_prefixes", "https://legacy-auto.example")
+	if got := app.githubDownloadRoute(raw); got.URL != raw || got.Direct {
+		t.Fatalf("unconfigured route = %#v, want official URL", got)
+	}
+	if _, err := app.DB.Exec(`update system_setups set github_accelerator_enabled=true,github_accelerator_url='ftp://legacy-invalid.example'`); err != nil {
+		t.Fatal(err)
+	}
+	if got := app.githubDownloadRoute(raw); got.URL != raw || got.Direct {
+		t.Fatalf("invalid persisted accelerator changed route: %#v", got)
+	}
+
+	setManualAcceleratorForTest(t, app, "https://operator-mirror.example")
+	if got := app.githubDownloadRoute(raw); got.URL != "https://operator-mirror.example/"+raw || !got.Direct {
+		t.Fatalf("manual accelerator route = %#v", got)
+	}
+
+	if _, err := app.DB.Exec(`update system_setups set github_proxy_enabled=true,github_http_proxy='http://127.0.0.1:18080'`); err != nil {
+		t.Fatal(err)
+	}
+	if got := app.githubDownloadRoute(raw); got.URL != raw || got.Direct {
+		t.Fatalf("explicit proxy must keep the official URL, got %#v", got)
 	}
 }
 

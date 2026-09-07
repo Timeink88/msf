@@ -11,6 +11,7 @@ import {
   FileText,
   GitBranch,
   Gamepad2,
+  KeyRound,
   Languages,
   Loader2,
   Menu,
@@ -1226,12 +1227,12 @@ function InitConfigEditor({
                 <input
                   value={draft.githubAcceleratorUrl}
                   onChange={(event) => setDraft((current) => ({ ...current, githubAcceleratorUrl: event.target.value }))}
-                  placeholder="例如: https://gh-proxy.com"
+                  placeholder="请输入完整的 HTTP(S) 加速前缀"
                   className={`${inputClass} h-11 text-sm`}
                 />
               </Field>
               <p className="text-xs text-muted-foreground">
-                此处为手动指定的加速地址（自动探测模式下可留空）；完整模式切换、镜像测速与 Token 配置见下方「GitHub 加速镜像」卡片。
+                只使用你填写的地址；系统不预置、不探测，也不会自动切换镜像。若同时启用代理服务器，代理服务器优先。
               </p>
             </div>
           </div>
@@ -1497,17 +1498,8 @@ function SystemTab({ showToast, isAdmin }: { showToast: (message: string) => voi
         )}
       </Card>
 
-      <Card title="GitHub 加速镜像" Icon={GitBranch}>
-        <GitHubAcceleratorCard
-          onManualPrefixSaved={(prefix) => {
-            const patch = {
-              githubAcceleratorEnabled: Boolean(prefix),
-              githubAcceleratorUrl: prefix,
-            };
-            setInitConfig((current) => ({ ...current, ...patch }));
-            setDraftConfig((current) => ({ ...current, ...patch }));
-          }}
-        />
+      <Card title="GitHub Token" Icon={KeyRound}>
+        <GitHubAcceleratorCard />
       </Card>
 
       <Card title="UDP 直连" Icon={Gamepad2}>

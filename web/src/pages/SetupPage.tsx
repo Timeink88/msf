@@ -2087,8 +2087,8 @@ export function SetupPage() {
                       </CheckOption>
                       <CheckOption
                       name="github_accelerator_enabled"
-                      title="加速代理"
-                      description="使用 GitHub 加速镜像下载组件"
+                      title="加速镜像源（手动）"
+                      description="只使用你填写的 GitHub 加速前缀"
                       checked={form.github_accelerator_enabled}
                       onChange={(checked) => update("github_accelerator_enabled", checked)}
                     >
@@ -2100,12 +2100,12 @@ export function SetupPage() {
                             type="url"
                             autoComplete="off"
                             spellCheck={false}
-                            placeholder="GitHub 加速前缀，例如 https://gh-proxy.com"
+                            placeholder="请输入完整的 HTTP(S) 加速前缀"
                             value={form.github_accelerator_url}
                             onChange={(event) => update("github_accelerator_url", event.target.value)}
                         />
                         <p className="text-[11px] leading-relaxed text-muted-foreground">
-                          此处为手动指定的加速地址；留空并勾选时将使用内置公共镜像自动测速选线（gh-proxy.com、ghfast.top 等），安装完成后可在 设置→系统→GitHub 加速镜像 中查看测速状态、管理镜像与配置 GitHub Token。
+                          系统不预置、不探测，也不会自动切换镜像；留空不会启用任何加速源。若同时启用代理服务器，代理服务器优先。
                         </p>
                       </div>
                       </CheckOption>
