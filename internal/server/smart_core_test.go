@@ -140,6 +140,7 @@ func insertSetupRow(t *testing.T, app *App, coreType string, amd64v3 bool, accel
 	// reach the real internet from unit tests).
 	if acceleratorURL != "" {
 		app.setSetting(settingAcceleratorMode, "manual")
+		app.githubAPIBaseURL = acceleratorURL
 	}
 }
 
@@ -169,12 +170,12 @@ func newCapturingReleaseServer(t *testing.T, release githubRelease, blob []byte,
 	if err != nil {
 		t.Fatal(err)
 	}
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if captures != nil {
 			*captures = append(*captures, r.URL.Path)
 		}
 		switch {
-		case strings.Contains(r.URL.Path, "api.github.com"):
+		case strings.HasPrefix(r.URL.Path, "/repos/") || strings.Contains(r.URL.Path, "api.github.com"):
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = w.Write(releaseJSON)
 		case strings.Contains(r.URL.Path, "releases/download"):
@@ -184,26 +185,6 @@ func newCapturingReleaseServer(t *testing.T, release githubRelease, blob []byte,
 			http.NotFound(w, r)
 		}
 	}))
-	// Release 元数据如今只走可信通道（token/代理/直连），不再经镜像前缀，
-	// 用测试缝把元数据请求指到本 fixture；下载仍走镜像前缀进本服务器。
-	original := metadataFetchOverride
-	metadataFetchOverride = func(ctx context.Context, rawURL string, dst any) error {
-		req, err := http.NewRequestWithContext(ctx, http.MethodGet, server.URL+"/"+rawURL, nil)
-		if err != nil {
-			return err
-		}
-		resp, err := http.DefaultClient.Do(req)
-		if err != nil {
-			return err
-		}
-		defer resp.Body.Close()
-		if resp.StatusCode >= 300 {
-			return errors.New("fixture metadata http " + resp.Status)
-		}
-		return json.NewDecoder(resp.Body).Decode(dst)
-	}
-	t.Cleanup(func() { metadataFetchOverride = original })
-	return server
 }
 
 // metaReleaseForPlatform builds an official MetaCubeX latest release whose

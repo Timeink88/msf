@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log"
 	"net"
@@ -80,6 +81,12 @@ type App struct {
 	gameUdpBypassValue      string
 	chinaUdpBypassMu        sync.RWMutex
 	chinaUdpBypassValue     string
+	accelerators            *acceleratorManager
+	acceleratorPrefixes     []string
+	githubAPIBaseURL        string
+	dnsBenchmarkMu          sync.Mutex
+	dnsBenchmarkRunning     bool
+	dnsBenchmarkLastStarted time.Time
 }
 
 type assistantCancelEntry struct {
@@ -125,6 +132,9 @@ func New(opts Options) (*App, error) {
 		assistantCancels:      make(map[string]assistantCancelEntry),
 		smartResourceJobs:     make(map[string]smartResourceState),
 		smartResourceCancels:  make(map[string]smartResourceCancelEntry),
+		accelerators:          &acceleratorManager{},
+		acceleratorPrefixes:   append([]string(nil), builtinGitHubAcceleratorPrefixes...),
+		githubAPIBaseURL:      "https://api.github.com",
 	}
 	if request, ok, readErr := readFactoryResetRequest(opts.DataDir); readErr == nil && ok {
 		app.operations.resetID = request.ResetID
@@ -137,6 +147,10 @@ func New(opts Options) (*App, error) {
 	if err := app.ensureSecret(); err != nil {
 		db.Close()
 		return nil, err
+	}
+	if err := app.migrateGitHubTokenStorage(); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("migrate GitHub token storage: %w", err)
 	}
 	app.ensureMihomoControllerSecret()
 	app.ensureGameUDPBypassCache()
@@ -240,7 +254,7 @@ func (a *App) withCommonMiddleware(next http.Handler) http.Handler {
 			}
 			a.logHTTPRequest(r, rec.statusCode(), time.Since(start))
 		}()
-		rec.Header().Set("Vary", "Origin")
+		rec.Header().Add("Vary", "Origin")
 		rec.Header().Set("Access-Control-Allow-Origin", "*")
 		rec.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type")
 		rec.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
@@ -340,7 +354,6 @@ func (a *App) publicAPI(path string) bool {
 		"/api/v1/setup/reset/status",
 		"/api/v1/auth/login",
 		"/api/v1/auth/refresh",
-		"/api/v1/system/dns-benchmark",
 		"/api/v1/license-activation/status",
 		"/api/v1/license-activation/hardware-fingerprint",
 	}
@@ -348,6 +361,9 @@ func (a *App) publicAPI(path string) bool {
 		if path == p {
 			return true
 		}
+	}
+	if path == "/api/v1/system/dns-benchmark" {
+		return !a.IsInitialized()
 	}
 	return strings.HasPrefix(path, "/api/v1/setup/download/")
 }

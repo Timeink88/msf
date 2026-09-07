@@ -20,6 +20,7 @@ import (
 	"net/http"
 	"os"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -63,29 +64,28 @@ var dnsBuiltinCandidates = []dnsBenchmarkCandidate{
 	{Name: "OneDNS DoH", Vendor: "onedns", Protocol: "doh", Addr: "https://117.50.10.10/dns-query"},
 }
 
-// dnsProbeTargets 前两个为存在域（必须 NOERROR 且带答案——只回事务头
+// dnsProbeDomains 前两个为存在域（必须 NOERROR 且带答案——只回事务头
 // 的 SERVFAIL/REFUSED 上游会被这段挡下）；最后一个为不存在域：部分上游
 // 对不存在域会挂起或过滤，用它把这类上游识别出来，NXDOMAIN 属健康表现。
-type dnsProbeTarget struct {
-	domain        string
-	requireAnswer bool
-}
-
-var dnsProbeTargets = []dnsProbeTarget{
-	{domain: "www.taobao.com", requireAnswer: true},
-	{domain: "www.qq.com", requireAnswer: true},
-	{domain: "msf-nxdomain-probe.invalid", requireAnswer: false},
-}
+var dnsProbeDomains = []string{"www.taobao.com", "www.qq.com", "msf-nxdomain-probe.invalid"}
 
 const (
 	dnsBenchmarkUDPRoundTimeout = 1200 * time.Millisecond
 	dnsBenchmarkDoHRoundTimeout = 2500 * time.Millisecond
 	dnsBenchmarkTotalTimeout    = 50 * time.Second
 	dnsBenchmarkConcurrency     = 8
+	dnsBenchmarkCooldown        = 5 * time.Second
 )
 
 func (a *App) handleDNSBenchmark(w http.ResponseWriter, r *http.Request) {
 	started := time.Now()
+	finish, retryAfter, ok := a.beginDNSBenchmark(started)
+	if !ok {
+		w.Header().Set("Retry-After", strconv.Itoa(retryAfter))
+		writeError(w, http.StatusTooManyRequests, "dns_benchmark_busy", "DNS 测速正在运行或请求过于频繁，请稍后重试")
+		return
+	}
+	defer finish()
 	ctx, cancel := context.WithTimeout(r.Context(), dnsBenchmarkTotalTimeout)
 	defer cancel()
 
@@ -105,6 +105,28 @@ func (a *App) handleDNSBenchmark(w http.ResponseWriter, r *http.Request) {
 		TookMs:      time.Since(started).Milliseconds(),
 		Note:        note,
 	})
+}
+
+func (a *App) beginDNSBenchmark(now time.Time) (finish func(), retryAfter int, ok bool) {
+	a.dnsBenchmarkMu.Lock()
+	defer a.dnsBenchmarkMu.Unlock()
+	if a.dnsBenchmarkRunning {
+		return nil, int(dnsBenchmarkTotalTimeout.Seconds()), false
+	}
+	if elapsed := now.Sub(a.dnsBenchmarkLastStarted); !a.dnsBenchmarkLastStarted.IsZero() && elapsed < dnsBenchmarkCooldown {
+		retry := int((dnsBenchmarkCooldown - elapsed).Seconds())
+		if retry < 1 {
+			retry = 1
+		}
+		return nil, retry, false
+	}
+	a.dnsBenchmarkRunning = true
+	a.dnsBenchmarkLastStarted = now
+	return func() {
+		a.dnsBenchmarkMu.Lock()
+		a.dnsBenchmarkRunning = false
+		a.dnsBenchmarkMu.Unlock()
+	}, 0, true
 }
 
 // selectRecommendedUpstreams 从测速结果里挑选并发上游池：仅保留全部轮次
@@ -180,18 +202,20 @@ func runDNSBenchmark(ctx context.Context, candidates []dnsBenchmarkCandidate) []
 }
 
 func probeCandidate(ctx context.Context, c dnsBenchmarkCandidate) dnsBenchmarkResult {
-	result := dnsBenchmarkResult{dnsBenchmarkCandidate: c, Rounds: len(dnsProbeTargets)}
+	result := dnsBenchmarkResult{dnsBenchmarkCandidate: c, Rounds: len(dnsProbeDomains)}
 	var total time.Duration
 	successes := 0
-	for i, target := range dnsProbeTargets {
+	for i, domain := range dnsProbeDomains {
 		id := uint16(0x5a00 + i)
-		query := buildDNSAQuery(id, target.domain)
+		query := buildDNSAQuery(id, domain)
 		var elapsed time.Duration
 		var err error
+		allowNXDomain := strings.HasSuffix(domain, ".invalid")
+		requireAnswer := !allowNXDomain
 		if c.Protocol == "doh" {
-			elapsed, err = probeDoHOnce(ctx, c.Addr, query, target.requireAnswer)
+			elapsed, err = probeDoHOnce(ctx, c.Addr, query, allowNXDomain, requireAnswer)
 		} else {
-			elapsed, err = probeUDPOnce(ctx, c.Addr, query, id, target.requireAnswer)
+			elapsed, err = probeUDPOnce(ctx, c.Addr, query, id, allowNXDomain, requireAnswer)
 		}
 		if err == nil {
 			successes++
@@ -201,14 +225,14 @@ func probeCandidate(ctx context.Context, c dnsBenchmarkCandidate) dnsBenchmarkRe
 		}
 	}
 	result.Successes = successes
-	result.OK = successes == len(dnsProbeTargets)
+	result.OK = successes == len(dnsProbeDomains)
 	if successes > 0 {
 		result.AvgMs = float64(total.Milliseconds()) / float64(successes)
 	}
 	return result
 }
 
-func probeUDPOnce(ctx context.Context, addr string, query []byte, id uint16, requireAnswer bool) (time.Duration, error) {
+func probeUDPOnce(ctx context.Context, addr string, query []byte, id uint16, allowNXDomain, requireAnswer bool) (time.Duration, error) {
 	if !strings.Contains(addr, ":") {
 		addr = net.JoinHostPort(addr, "53")
 	}
@@ -228,7 +252,7 @@ func probeUDPOnce(ctx context.Context, addr string, query []byte, id uint16, req
 	if err != nil {
 		return 0, err
 	}
-	if err := validateDNSResponse(buf[:n], id, requireAnswer); err != nil {
+	if err := validateDNSResponse(buf[:n], id, allowNXDomain, requireAnswer); err != nil {
 		return 0, err
 	}
 	return time.Since(started), nil
@@ -241,7 +265,7 @@ var dnsBenchmarkHTTPClient = &http.Client{
 	},
 }
 
-func probeDoHOnce(ctx context.Context, url string, query []byte, requireAnswer bool) (time.Duration, error) {
+func probeDoHOnce(ctx context.Context, url string, query []byte, allowNXDomain, requireAnswer bool) (time.Duration, error) {
 	started := time.Now()
 	ctx, cancel := context.WithTimeout(ctx, dnsBenchmarkDoHRoundTimeout)
 	defer cancel()
@@ -262,7 +286,7 @@ func probeDoHOnce(ctx context.Context, url string, query []byte, requireAnswer b
 	if resp.StatusCode != http.StatusOK {
 		return 0, fmt.Errorf("http %d", resp.StatusCode)
 	}
-	if err := validateDNSResponse(body, binary.BigEndian.Uint16(query[0:2]), requireAnswer); err != nil {
+	if err := validateDNSResponse(body, binary.BigEndian.Uint16(query[0:2]), allowNXDomain, requireAnswer); err != nil {
 		return 0, err
 	}
 	return time.Since(started), nil
@@ -289,10 +313,7 @@ func buildDNSAQuery(id uint16, domain string) []byte {
 	return buf
 }
 
-// validateDNSResponse 校验响应不只是「回了包」：事务 ID 与 QR 位之外，
-// RCODE 必须是终态（NOERROR/NXDOMAIN），存在域还必须有答案记录。只查
-// ID/QR 的旧实现会把秒回 SERVFAIL/REFUSED 的坏上游评为低延迟可用。
-func validateDNSResponse(msg []byte, id uint16, requireAnswer bool) error {
+func validateDNSResponse(msg []byte, id uint16, allowNXDomain, requireAnswer bool) error {
 	if len(msg) < 12 {
 		return fmt.Errorf("short response")
 	}
@@ -303,35 +324,13 @@ func validateDNSResponse(msg []byte, id uint16, requireAnswer bool) error {
 		return fmt.Errorf("not a response")
 	}
 	rcode := msg[3] & 0x0f
-	if rcode == 3 {
-		// NXDOMAIN：对不存在域探测是健康终态，对存在域说明上游解析不了。
-		if requireAnswer {
-			return fmt.Errorf("NXDOMAIN for a domain that must resolve")
-		}
-		return nil
-	}
-	if rcode != 0 {
-		return fmt.Errorf("rcode %d (%s)", rcode, dnsRCODEName(rcode))
+	if rcode != 0 && !(allowNXDomain && rcode == 3) {
+		return fmt.Errorf("dns response rcode %d", rcode)
 	}
 	if requireAnswer && binary.BigEndian.Uint16(msg[6:8]) == 0 {
-		return fmt.Errorf("no answer records")
+		return fmt.Errorf("dns response has no answers")
 	}
 	return nil
-}
-
-func dnsRCODEName(rcode byte) string {
-	switch rcode {
-	case 1:
-		return "FORMERR"
-	case 2:
-		return "SERVFAIL"
-	case 4:
-		return "NOTIMP"
-	case 5:
-		return "REFUSED"
-	default:
-		return "unknown"
-	}
 }
 
 // discoverGatewayCandidates 发现本网络的上游候选：默认网关与本机 resolver

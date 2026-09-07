@@ -33,6 +33,7 @@ type ServiceManager struct {
 	// so the waiter cannot rely on "desired" alone to tell an accidental
 	// death from an intentional one.
 	deliberateStop map[string]bool
+	shuttingDown   bool
 }
 
 // autoRestart timing: wait before the first revival attempt, the ceiling for
@@ -109,6 +110,9 @@ func (sm *ServiceManager) Status(name string) ServiceStatus {
 func (sm *ServiceManager) Start(ctx context.Context, name string) (ServiceStatus, error) {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
+	if sm.shuttingDown {
+		return sm.Status(name), errors.New("service manager is shutting down")
+	}
 	spec, err := sm.spec(name)
 	if err != nil {
 		return sm.Status(name), err
@@ -180,7 +184,7 @@ func (sm *ServiceManager) Start(ctx context.Context, name string) (ServiceStatus
 		// deaths keep the escalated interval from the previous loop.
 		deliberate := sm.deliberateStop[name]
 		delete(sm.deliberateStop, name)
-		revive := !deliberate && sm.app.setting(serviceDesiredKey(name), "") == "true"
+		revive := !deliberate && !sm.shuttingDown && sm.app.setting(serviceDesiredKey(name), "") == "true"
 		if !revive || time.Since(startedAt) >= autoRestartStableUptime {
 			sm.lastBackoff[name] = 0
 		}
@@ -322,6 +326,16 @@ func (sm *ServiceManager) StopAll(ctx context.Context) error {
 	return nil
 }
 
+// Shutdown prevents pending crash-recovery loops and concurrent API calls from
+// starting new children while the parent process exits. StopAll remains
+// reusable by factory-reset flows that intentionally restart services later.
+func (sm *ServiceManager) Shutdown(ctx context.Context) error {
+	sm.mu.Lock()
+	sm.shuttingDown = true
+	sm.mu.Unlock()
+	return sm.StopAll(ctx)
+}
+
 func (sm *ServiceManager) StartEnabled(ctx context.Context) []string {
 	var errs []string
 	for _, name := range []string{"mosdns", "mihomo"} {
@@ -358,6 +372,12 @@ func (sm *ServiceManager) autoRestartLoop(name string) {
 	for {
 		timer := time.NewTimer(backoff)
 		<-timer.C
+		sm.mu.Lock()
+		shuttingDown := sm.shuttingDown
+		sm.mu.Unlock()
+		if shuttingDown {
+			return
+		}
 		if sm.app.setting(serviceDesiredKey(name), "") != "true" {
 			return
 		}

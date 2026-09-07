@@ -709,7 +709,7 @@ func combinedOutputWithTimeout(ctx context.Context, timeout time.Duration, name 
 	return out, err
 }
 
-// settingsResponseRedactedKeys 通用设置响应里绝不能原样回显的凭据：
+// settingsResponseValue 处理通用设置响应里绝不能原样回显的凭据：
 // github_token 与 mihomo_controller_secret 都是可直接调用对应服务端的
 // Bearer 凭据。前端对通用 settings 只做按键读写（不整表回存），掩码值
 // 不会被写回；写入仍走各自专用端点。
@@ -732,6 +732,9 @@ func (a *App) handleSettingsGet(w http.ResponseWriter, r *http.Request) {
 	for rows.Next() {
 		var k, v string
 		_ = rows.Scan(&k, &v)
+		if k == settingGitHubToken || k == settingGitHubTokenCiphertext || k == settingGitHubTokenNonce {
+			continue
+		}
 		settings[k] = settingsResponseValue(k, v)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"success": true, "settings": settings, "data": settings})
@@ -743,9 +746,31 @@ func (a *App) handleSettingsPut(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "bad_request", err.Error())
 		return
 	}
+	if _, exists := raw[settingGitHubTokenCiphertext]; exists {
+		writeError(w, http.StatusBadRequest, "bad_request", "encrypted GitHub token fields are managed internally")
+		return
+	}
+	if _, exists := raw[settingGitHubTokenNonce]; exists {
+		writeError(w, http.StatusBadRequest, "bad_request", "encrypted GitHub token fields are managed internally")
+		return
+	}
+	if value, exists := raw[settingGitHubToken]; exists {
+		token := strings.TrimSpace(fmtAny(value))
+		if token != "" && (len(token) < 16 || len(token) > 255) {
+			writeError(w, http.StatusBadRequest, "bad_request", "github token length looks invalid")
+			return
+		}
+		if err := a.saveGitHubToken(token); err != nil {
+			writeError(w, http.StatusInternalServerError, "settings_error", "save GitHub token: "+err.Error())
+			return
+		}
+	}
 	// setSetting（而非直写 DB）会同步刷新带内存缓存的设置项：
 	// game_udp_bypass_ports 的 nft 渲染只读缓存，直写 DB 会导致改动不生效。
 	for k, value := range raw {
+		if k == settingGitHubToken {
+			continue
+		}
 		a.setSetting(k, fmtAny(value))
 	}
 	payload := map[string]any{"success": true}
@@ -827,14 +852,9 @@ func (a *App) handleSettingsAppearancePut(w http.ResponseWriter, r *http.Request
 		writeError(w, http.StatusBadRequest, "bad_request", err.Error())
 		return
 	}
-	// 外观设置是全局的：主题/皮肤改动所有用户可见尚可接受，但自定义 CSS
-	// 能改写任何人（含管理员）看到的界面元素，写权限必须收敛到管理员。
-	// 路由层对非 guest 角色放行该端点，这里按字段再收紧。
-	if _, ok := req["custom_css"]; ok {
-		if u := currentUser(r); u == nil || !strings.EqualFold(strings.TrimSpace(u.Role), "admin") {
-			writeError(w, http.StatusForbidden, "forbidden", "custom_css 是全局设置，仅管理员可修改")
-			return
-		}
+	if _, hasCustomCSS := req["custom_css"]; hasCustomCSS && !a.requireAdmin(r) {
+		writeError(w, http.StatusForbidden, "admin_required", "自定义 CSS 是全局设置，仅管理员可以修改")
+		return
 	}
 	opacity, hasOpacity, err := validateContentPlateOpacityPayload(req)
 	if err != nil {

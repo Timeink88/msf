@@ -71,3 +71,20 @@ func TestRenderMosDNSManagedFilesOverridesReplaceForwardUpstreams(t *testing.T) 
 		t.Fatalf("default pool entry should be replaced by overrides:\n%s", local)
 	}
 }
+
+func TestMosDNSLocalSuffixRejectionUsesDomainMatcher(t *testing.T) {
+	content, ok := runtimeTemplateText("mosdns/config.yaml")
+	if !ok {
+		t.Fatal("missing MosDNS config template")
+	}
+	for _, matcher := range []string{"qname domain:lan", "qname domain:local"} {
+		if got := strings.Count(content, matcher); got != 2 {
+			t.Fatalf("matcher %q appears %d times, want 2", matcher, got)
+		}
+	}
+	for _, unsafe := range []string{"qname keyword:.lan", "qname keyword:.local"} {
+		if strings.Contains(content, unsafe) {
+			t.Fatalf("substring matcher %q can reject public domains such as example.land", unsafe)
+		}
+	}
+}

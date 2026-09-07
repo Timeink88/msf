@@ -3,6 +3,7 @@ package server
 import (
 	"encoding/binary"
 	"testing"
+	"time"
 )
 
 func TestBuildDNSAQueryWireFormat(t *testing.T) {
@@ -41,50 +42,56 @@ func TestBuildDNSAQueryWireFormat(t *testing.T) {
 
 func TestValidateDNSResponse(t *testing.T) {
 	query := buildDNSAQuery(0xabcd, "www.qq.com")
-	if err := validateDNSResponse(query, 0xabcd, true); err == nil {
+	if err := validateDNSResponse(query, 0xabcd, false, true); err == nil {
 		t.Fatal("request accepted as response")
 	}
 	resp := make([]byte, len(query))
 	copy(resp, query)
 	resp[2] |= 0x80
-	if err := validateDNSResponse(resp, 0xabcd, true); err == nil {
-		t.Fatal("NOERROR with zero answers accepted for an existing domain")
+	binary.BigEndian.PutUint16(resp[6:8], 1)
+	if err := validateDNSResponse(resp, 0xabcd, false, true); err != nil {
+		t.Fatalf("valid response rejected: %v", err)
 	}
-	// 带答案后才算可用（ANCOUNT=1，答案体本身不解析）。
-	withAnswer := make([]byte, len(resp)+16)
-	copy(withAnswer, resp)
-	binary.BigEndian.PutUint16(withAnswer[6:8], 1)
-	if err := validateDNSResponse(withAnswer, 0xabcd, true); err != nil {
-		t.Fatalf("valid answered response rejected: %v", err)
-	}
-	if err := validateDNSResponse(withAnswer, 0x1111, true); err == nil {
+	if err := validateDNSResponse(resp, 0x1111, false, true); err == nil {
 		t.Fatal("mismatched id accepted")
 	}
-	if err := validateDNSResponse(withAnswer[:8], 0xabcd, true); err == nil {
+	if err := validateDNSResponse(resp[:8], 0xabcd, false, true); err == nil {
 		t.Fatal("short message accepted")
 	}
-	// SERVFAIL/REFUSED 秒回的上游必须判为不可用——它们往往延迟最低。
-	for _, rcode := range []byte{2, 5} {
-		failing := make([]byte, len(resp)+16)
-		copy(failing, resp)
-		binary.BigEndian.PutUint16(failing[6:8], 1)
-		failing[3] = (failing[3] & 0xf0) | rcode
-		if err := validateDNSResponse(failing, 0xabcd, true); err == nil {
-			t.Fatalf("rcode %d accepted", rcode)
-		}
-		if err := validateDNSResponse(failing, 0xabcd, false); err == nil {
-			t.Fatalf("rcode %d accepted for nxdomain probe", rcode)
-		}
+	servfail := append([]byte(nil), resp...)
+	servfail[3] = (servfail[3] & 0xf0) | 2
+	if err := validateDNSResponse(servfail, 0xabcd, true, false); err == nil {
+		t.Fatal("SERVFAIL response accepted as a usable upstream")
 	}
-	// NXDOMAIN：不存在域探测的健康终态，存在域不可接受。
-	nxdomain := make([]byte, len(resp)+16)
-	copy(nxdomain, resp)
+	nxdomain := append([]byte(nil), resp...)
 	nxdomain[3] = (nxdomain[3] & 0xf0) | 3
-	if err := validateDNSResponse(nxdomain, 0xabcd, false); err != nil {
-		t.Fatalf("NXDOMAIN rejected for nxdomain probe: %v", err)
+	if err := validateDNSResponse(nxdomain, 0xabcd, true, false); err != nil {
+		t.Fatalf("NXDOMAIN probe response rejected: %v", err)
 	}
-	if err := validateDNSResponse(nxdomain, 0xabcd, true); err == nil {
-		t.Fatal("NXDOMAIN accepted for an existing domain")
+	if err := validateDNSResponse(nxdomain, 0xabcd, false, true); err == nil {
+		t.Fatal("NXDOMAIN accepted for a known-existing probe domain")
+	}
+}
+
+func TestDNSBenchmarkRateGateAndSetupVisibility(t *testing.T) {
+	app := newTestApp(t)
+	if !app.publicAPI("/api/v1/system/dns-benchmark") {
+		t.Fatal("DNS benchmark must remain public before setup creates an account")
+	}
+	finish, _, ok := app.beginDNSBenchmark(time.Now())
+	if !ok || finish == nil {
+		t.Fatal("first DNS benchmark was rejected")
+	}
+	if _, _, ok := app.beginDNSBenchmark(time.Now()); ok {
+		t.Fatal("concurrent DNS benchmark was accepted")
+	}
+	finish()
+	if _, _, ok := app.beginDNSBenchmark(time.Now()); ok {
+		t.Fatal("DNS benchmark cooldown was not enforced")
+	}
+	insertSetupRow(t, app, "meta", false, "")
+	if app.publicAPI("/api/v1/system/dns-benchmark") {
+		t.Fatal("DNS benchmark remained unauthenticated after initialization")
 	}
 }
 

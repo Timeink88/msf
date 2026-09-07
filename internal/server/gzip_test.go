@@ -9,70 +9,59 @@ import (
 	"testing"
 )
 
-func TestClientAcceptsGzipRespectsQValue(t *testing.T) {
-	cases := map[string]bool{
-		"gzip":                true,
-		"gzip, deflate":       true,
-		"gzip; q=0.5":         true,
-		"gzip;q=0":            false,
-		"gzip;q=0.0, deflate": false,
-		"deflate":             false,
-		"*;q=0":               false,
-		"*;q=0, gzip":         true, // 显式 gzip 覆盖通配 q=0
-		"":                    false,
+func TestClientAcceptsGzipHonorsQuality(t *testing.T) {
+	tests := []struct {
+		header string
+		want   bool
+	}{
+		{header: "gzip", want: true},
+		{header: "br, gzip;q=0.5", want: true},
+		{header: "gzip;q=0, *;q=1", want: false},
+		{header: "br, *;q=0.8", want: true},
+		{header: "gzip;q=bogus", want: false},
 	}
-	for header, want := range cases {
-		r := httptest.NewRequest(http.MethodGet, "/", nil)
-		if header != "" {
-			r.Header.Set("Accept-Encoding", header)
-		}
-		if got := clientAcceptsGzip(r); got != want {
-			t.Fatalf("clientAcceptsGzip(%q) = %v, want %v", header, got, want)
+	for _, tc := range tests {
+		req := httptest.NewRequest(http.MethodGet, "/", nil)
+		req.Header.Set("Accept-Encoding", tc.header)
+		if got := clientAcceptsGzip(req); got != tc.want {
+			t.Fatalf("Accept-Encoding %q: got %v want %v", tc.header, got, tc.want)
 		}
 	}
 }
 
-func TestResponseCompressionSetsVaryAndHonorsQZero(t *testing.T) {
-	handler := withResponseCompression(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+func TestResponseCompressionSetsVaryAndSkipsRejectedGzip(t *testing.T) {
+	handler := withResponseCompression(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"ok":true}`))
+		_, _ = w.Write([]byte(`{"success":true}`))
 	}))
 
-	// gzip;q=0：绝不压缩，但表示随 Accept-Encoding 变化，Vary 仍必须在。
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/x", nil)
-	req.Header.Set("Accept-Encoding", "gzip;q=0")
-	rec := httptest.NewRecorder()
-	handler.ServeHTTP(rec, req)
-	if enc := rec.Header().Get("Content-Encoding"); enc != "" {
-		t.Fatalf("gzip;q=0 client got Content-Encoding %q", enc)
+	rejected := httptest.NewRequest(http.MethodGet, "/", nil)
+	rejected.Header.Set("Accept-Encoding", "gzip;q=0")
+	rejectedResponse := httptest.NewRecorder()
+	handler.ServeHTTP(rejectedResponse, rejected)
+	if rejectedResponse.Header().Get("Content-Encoding") != "" {
+		t.Fatal("response was compressed despite gzip;q=0")
 	}
-	if vary := rec.Header().Get("Vary"); !strings.Contains(vary, "Accept-Encoding") {
-		t.Fatalf("Vary = %q, want Accept-Encoding", vary)
-	}
-	if rec.Body.String() != `{"ok":true}` {
-		t.Fatalf("plain body = %q", rec.Body.String())
+	if !strings.Contains(rejectedResponse.Header().Get("Vary"), "Accept-Encoding") {
+		t.Fatalf("uncompressed response missing Vary header: %q", rejectedResponse.Header().Get("Vary"))
 	}
 
-	// 正常 gzip 客户端：压缩表示 + 可解压还原。
-	req2 := httptest.NewRequest(http.MethodGet, "/api/v1/x", nil)
-	req2.Header.Set("Accept-Encoding", "gzip")
-	rec2 := httptest.NewRecorder()
-	handler.ServeHTTP(rec2, req2)
-	if enc := rec2.Header().Get("Content-Encoding"); enc != "gzip" {
-		t.Fatalf("gzip client got Content-Encoding %q", enc)
+	accepted := httptest.NewRequest(http.MethodGet, "/", nil)
+	accepted.Header.Set("Accept-Encoding", "gzip")
+	acceptedResponse := httptest.NewRecorder()
+	handler.ServeHTTP(acceptedResponse, accepted)
+	if acceptedResponse.Header().Get("Content-Encoding") != "gzip" {
+		t.Fatalf("gzip response encoding = %q", acceptedResponse.Header().Get("Content-Encoding"))
 	}
-	if vary := rec2.Header().Get("Vary"); !strings.Contains(vary, "Accept-Encoding") {
-		t.Fatalf("Vary = %q, want Accept-Encoding", vary)
-	}
-	zr, err := gzip.NewReader(rec2.Body)
+	reader, err := gzip.NewReader(acceptedResponse.Body)
 	if err != nil {
 		t.Fatal(err)
 	}
-	body, err := io.ReadAll(zr)
+	body, err := io.ReadAll(reader)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if string(body) != `{"ok":true}` {
-		t.Fatalf("roundtrip body = %q", string(body))
+	if string(body) != `{"success":true}` {
+		t.Fatalf("decompressed body = %q", body)
 	}
 }

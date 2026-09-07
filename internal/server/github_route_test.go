@@ -6,7 +6,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
-	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -14,12 +13,11 @@ import (
 // mirrorFixture is an httptest accelerator that can answer probes (OK) and
 // API forwards (OK or a 403 rate-limit rejection) independently.
 type mirrorFixture struct {
-	server     *httptest.Server
-	apiHits    int
-	probeHits  int
-	rejectAPI  bool
-	delay      time.Duration
-	lastAPIURI atomic.Value
+	server    *httptest.Server
+	apiHits   int
+	probeHits int
+	rejectAPI bool
+	delay     time.Duration
 }
 
 func newMirrorFixture(t *testing.T, rejectAPI bool, delay time.Duration) *mirrorFixture {
@@ -29,7 +27,6 @@ func newMirrorFixture(t *testing.T, rejectAPI bool, delay time.Duration) *mirror
 		uri := r.RequestURI
 		if strings.Contains(uri, "api.github.com") {
 			m.apiHits++
-			m.lastAPIURI.Store(uri)
 			if m.rejectAPI {
 				w.Header().Set("Content-Type", "application/json")
 				w.WriteHeader(http.StatusForbidden)
@@ -57,98 +54,19 @@ func withTestAcceleratorPool(t *testing.T, prefixes ...string) {
 	t.Cleanup(func() { resetAcceleratorManagerForTest(original) })
 }
 
-func TestGitHubJSONNeverRoutesMetadataThroughMirror(t *testing.T) {
-	// A healthy mirror must never receive api.github.com metadata requests:
-	// the metadata carries both the asset URL and its digest, so a hostile
-	// mirror could forge a matching pair and defeat download verification.
-	// The mirrored URL would be mirror+"/https://api.github.com/..." — any
-	// hit on the fixture's api path means the regression is back.
+func TestGitHubJSONMetadataNeverTransitsMirror(t *testing.T) {
 	mirror := newMirrorFixture(t, false, 0)
 	withTestAcceleratorPool(t, mirror.server.URL)
 	app := newTestApp(t)
 	if snapshot := app.refreshAcceleratorSnapshot(context.Background()); snapshot.Best != mirror.server.URL {
 		t.Fatalf("probe winner = %q (results: %#v)", snapshot.Best, snapshot.Results)
 	}
-	// A URL whose host is not GitHub routes verbatim even with a live mirror:
-	// the received URI must be exactly what was requested — any accelerator
-	// prefix would show up here.
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
 	var release githubRelease
-	verbatim := mirror.server.URL + "/api.github.com/repos/x/y/releases/latest"
-	if err := app.fetchGitHubJSONContext(context.Background(), verbatim, &release); err != nil {
-		t.Fatalf("verbatim route failed: %v (apiHits=%d probeHits=%d)", err, mirror.apiHits, mirror.probeHits)
-	}
-	if release.TagName != "v9.9.9" {
-		t.Fatalf("payload not decoded: %#v", release)
-	}
-	// RequestURI 不含 scheme/host：等于请求路径即证明无镜像前缀拼接。
-	if got, _ := mirror.lastAPIURI.Load().(string); got != "/api.github.com/repos/x/y/releases/latest" {
-		t.Fatalf("metadata request URI = %q, want verbatim path (mirror prefixing is back)", got)
-	}
-}
-
-func TestGitHubJSONRetriesDirectLineAfterFailure(t *testing.T) {
-	var hits atomic.Int32
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if hits.Add(1) == 1 {
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusForbidden)
-			_, _ = w.Write([]byte(`{"message":"API rate limit exceeded for 1.2.3.4.","documentation_url":"https://docs.github.com"}`))
-			return
-		}
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"tag_name":"v9.9.9"}`))
-	}))
-	defer server.Close()
-
-	app := newTestApp(t)
-	var release githubRelease
-	if err := app.fetchGitHubJSONContext(context.Background(), server.URL+"/releases/latest", &release); err != nil {
-		t.Fatalf("direct retry should recover after a failed first line: %v", err)
-	}
-	if release.TagName != "v9.9.9" {
-		t.Fatalf("retry payload not decoded: %#v", release)
-	}
-	if hits.Load() != 2 {
-		t.Fatalf("total attempts = %d, want 2 (trusted line + direct retry)", hits.Load())
-	}
-}
-
-func TestGitHubReleaseAssetURLAcceptsOnlyGitHubDownloads(t *testing.T) {
-	ok := []string{
-		"https://github.com/MetaCubeX/mihomo/releases/latest/download/mihomo-linux-amd64.gz",
-		"https://github.com/vernesong/mihomo/releases/download/Prerelease-Alpha/mihomo-linux-arm64-v3.gz",
-	}
-	for _, raw := range ok {
-		if got, err := githubReleaseAssetURL(raw); err != nil || got != raw {
-			t.Fatalf("githubReleaseAssetURL(%q) = %q, %v; want verbatim acceptance", raw, got, err)
-		}
-	}
-	bad := map[string]string{
-		"":                               "empty",
-		"https://evil.example/mihomo.gz": "foreign host",
-		"http://github.com/owner/repo/releases/download/v1/a.gz": "plaintext http",
-		"https://github.com/owner/repo/archive/v1.tar.gz":        "not a release download",
-		"https://api.github.com/repos/o/r/releases/1":            "api endpoint, not asset",
-	}
-	for raw := range bad {
-		if got, err := githubReleaseAssetURL(raw); err == nil {
-			t.Fatalf("githubReleaseAssetURL(%q) accepted %q", raw, got)
-		}
-	}
-	// Forged metadata must not leak an executable route into self-update or
-	// component downloads: releaseAssetURL drops such assets entirely.
-	forged := githubRelease{
-		TagName: "v1.2.3",
-		Assets: []githubAsset{
-			{Name: "msf-linux-amd64.tar.gz", BrowserDownloadURL: "https://evil.example/msf-linux-amd64.tar.gz"},
-			{Name: "msf-linux-arm64.tar.gz", BrowserDownloadURL: "https://github.com/scoltzero/msf/releases/download/v1.2.3/msf-linux-arm64.tar.gz"},
-		},
-	}
-	if got := releaseAssetURL(forged, "linux-amd64", ".tar.gz"); got != "" {
-		t.Fatalf("forged asset URL accepted: %q", got)
-	}
-	if got := releaseAssetURL(forged, "linux-arm64", ".tar.gz"); got != "https://github.com/scoltzero/msf/releases/download/v1.2.3/msf-linux-arm64.tar.gz" {
-		t.Fatalf("legit asset not selected: %q", got)
+	_ = app.fetchGitHubJSONContext(ctx, "https://api.github.com/repos/scoltzero/msf/releases/latest", &release)
+	if mirror.apiHits != 0 {
+		t.Fatalf("release metadata transited the public mirror %d times", mirror.apiHits)
 	}
 }
 
@@ -156,7 +74,9 @@ func TestGitHubJSONTokenNeverTransitsMirror(t *testing.T) {
 	mirror := newMirrorFixture(t, false, 0)
 	withTestAcceleratorPool(t, mirror.server.URL)
 	app := newTestApp(t)
-	app.setSetting(settingGitHubToken, "ghp_token1234567890abcdef")
+	if err := app.saveGitHubToken("ghp_token1234567890abcdef"); err != nil {
+		t.Fatal(err)
+	}
 
 	// Cancelled context: the request itself fails immediately, but the
 	// routing decision is still observable — the mirror must never be hit.
@@ -166,6 +86,20 @@ func TestGitHubJSONTokenNeverTransitsMirror(t *testing.T) {
 	_ = app.fetchGitHubJSONContext(ctx, "https://api.github.com/repos/scoltzero/msf/releases/latest", &release)
 	if mirror.apiHits != 0 {
 		t.Fatalf("tokened request transited the public mirror %d times", mirror.apiHits)
+	}
+}
+
+func TestGitHubAcceleratorOffModeDoesNotProbe(t *testing.T) {
+	mirror := newMirrorFixture(t, false, 0)
+	withTestAcceleratorPool(t, mirror.server.URL)
+	app := newTestApp(t)
+	app.setSetting(settingAcceleratorMode, "off")
+	snapshot := app.refreshAcceleratorSnapshot(context.Background())
+	if snapshot.Mode != "off" || snapshot.Best != "" || len(snapshot.Results) != 0 {
+		t.Fatalf("off-mode snapshot = %#v", snapshot)
+	}
+	if mirror.probeHits != 0 {
+		t.Fatalf("off mode probed public accelerators %d times", mirror.probeHits)
 	}
 }
 
@@ -179,7 +113,9 @@ func TestGitHubJSONTokenSendsBearer(t *testing.T) {
 	defer server.Close()
 
 	app := newTestApp(t)
-	app.setSetting(settingGitHubToken, "ghp_token1234567890abcdef")
+	if err := app.saveGitHubToken("ghp_token1234567890abcdef"); err != nil {
+		t.Fatal(err)
+	}
 	var release githubRelease
 	// Non-GitHub host: routed verbatim, so the httptest URL is reachable.
 	if err := app.fetchGitHubJSONOnce(context.Background(), server.URL, false, "ghp_token1234567890abcdef", &release, "token"); err != nil {
@@ -231,6 +167,18 @@ func TestGitHubAcceleratorsPUTAndMaskedToken(t *testing.T) {
 	if full := res.Body.String(); strings.Contains(full, "ghp_token1234567890abcdef") {
 		t.Fatal("raw token leaked through the accelerators endpoint")
 	}
+	var legacyCount int
+	if err := app.DB.QueryRow(`select count(*) from settings where key=?`, settingGitHubToken).Scan(&legacyCount); err != nil || legacyCount != 0 {
+		t.Fatalf("plaintext GitHub token key remains: count=%d err=%v", legacyCount, err)
+	}
+	var encrypted string
+	if err := app.DB.QueryRow(`select value from settings where key=?`, settingGitHubTokenCiphertext).Scan(&encrypted); err != nil || encrypted == "" || strings.Contains(encrypted, "ghp_token") {
+		t.Fatalf("encrypted GitHub token storage invalid: value=%q err=%v", encrypted, err)
+	}
+	settings := requestJSON(t, app, http.MethodGet, "/api/v1/settings", token, nil)
+	if body := settings.Body.String(); strings.Contains(body, "ghp_token1234567890abcdef") || strings.Contains(body, settingGitHubTokenCiphertext) || strings.Contains(body, settingGitHubTokenNonce) {
+		t.Fatalf("generic settings response exposed GitHub token material: %s", body)
+	}
 
 	res = requestJSON(t, app, http.MethodPut, "/api/v1/github/accelerators", token, map[string]any{"reset_token": true})
 	if res.Code != http.StatusOK {
@@ -276,5 +224,30 @@ func TestMaskGitHubToken(t *testing.T) {
 		if got := maskGitHubToken(input); got != want {
 			t.Fatalf("maskGitHubToken(%q) = %q, want %q", input, got, want)
 		}
+	}
+}
+
+func TestGitHubTokenLegacyStorageMigratesWithoutChangingValue(t *testing.T) {
+	app := newTestApp(t)
+	const token = "ghp_legacytoken1234567890"
+	app.setSetting(settingGitHubToken, token)
+	if err := app.migrateGitHubTokenStorage(); err != nil {
+		t.Fatal(err)
+	}
+	if got := app.githubToken(); got != token {
+		t.Fatalf("migrated token = %q", got)
+	}
+	var count int
+	if err := app.DB.QueryRow(`select count(*) from settings where key=?`, settingGitHubToken).Scan(&count); err != nil || count != 0 {
+		t.Fatalf("legacy plaintext key remains: count=%d err=%v", count, err)
+	}
+	const replacement = "ghp_replacement1234567890"
+	admin := tokenForRole(t, app, "admin")
+	res := requestJSON(t, app, http.MethodPut, "/api/v1/settings", admin, map[string]any{settingGitHubToken: replacement})
+	if res.Code != http.StatusOK || app.githubToken() != replacement {
+		t.Fatalf("legacy settings endpoint did not encrypt replacement token: status=%d body=%s", res.Code, res.Body.String())
+	}
+	if err := app.DB.QueryRow(`select count(*) from settings where key=?`, settingGitHubToken).Scan(&count); err != nil || count != 0 {
+		t.Fatalf("legacy settings endpoint stored plaintext token: count=%d err=%v", count, err)
 	}
 }

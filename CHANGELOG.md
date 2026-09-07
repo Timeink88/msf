@@ -4,22 +4,9 @@
 
 ### 中文
 
-#### PR review 修复（合并阻断项）
-
-- 供应链加固：GitHub Release 元数据（下载地址与 SHA-256 摘要的共同来源）不再经公共加速镜像获取——恶意镜像无法同时伪造地址、二进制与匹配摘要骗过校验；元数据仅走 Token / 运营商代理 / 直连三条可信通道，镜像只承担已获可信摘要的资产字节下载；资产 URL 强制校验为 https://github.com 发布资产，自更新使用历史存储地址前同样校验。
-- 修复前端锁文件与 package.json 脱节（React 19.2.8 vs 19.2.6）：干净构建（npm ci）此前必然失败。
-- 修复 MosDNS 本地保留 TLD 误杀正常域名：`keyword:.lan/.local` 是子串匹配，会拒答 www.lancome.com、example.land 等；改为 `domain:` 锚定（仅匹配该 TLD 及其子域）。
-- 修复自定义 Mihomo 控制器 secret 导致 MSF 与 Zashboard 整体失联：活动配置中用户自带的 secret 现在真正优先于自动生成值（此前自动注入对自带 secret 的配置不生效，而请求仍读生成值，两者不一致即 401）。
-- 修复 DNS 测速把秒回 SERVFAIL/REFUSED 的上游评为低延迟可用：响应校验现在要求 RCODE 终态（NOERROR/NXDOMAIN），存在域还必须有答案记录，防止初始化后 DNS 无法解析。
-- 权限收敛：全局自定义 CSS 写入从所有非 guest 角色收紧为仅管理员（外观其余字段行为不变）——CSS 可改写任何人看到的界面元素。
-- 凭据不再经通用设置接口原样回显：github_token 与 mihomo_controller_secret 在 GET /api/v1/settings 中掩码（写入仍走专用端点）。
-- gzip 协商尊重 q 值（gzip;q=0 / *;q=0 不再拿到压缩体），所有响应补齐 Vary: Accept-Encoding，共享缓存不再存错表示。
-- 内嵌 CN CIDR 快照补齐可追溯来源：文件头注明快照日期、公共注册表数据属性及与社区日更清单（Rabbit-Spec/Surge、Repcz/Tool）的交叉验证结论，THIRD_PARTY_NOTICES.md 增设条目。
-- 变更范围内的 Go 文件全部通过 gofmt。
-
 #### 国内 UDP 内核直连（游戏断线的根治性方案）
 
-- 新增「国内 UDP 直连」能力（默认开启）：目的地为国内 IP 的 UDP 流量在 nftables 内核层直接放行、不再经过代理隧道——所有国服游戏零配置免受代理隧道 60 秒 UDP 会话空闲超时导致的周期性断线影响；同时卸载了代理核心的国内 UDP 会话负担。CN IP 段内置随二进制分发（IPv4 6233 段 / IPv6 3395 段），支持运行时数据文件覆盖以便后续经组件更新通道刷新。
+- 新增「国内 UDP 直连」能力（默认开启）：目的地为国内 IP 的 UDP 流量在 nftables 内核层直接放行、不再经过代理隧道——所有国服游戏零配置免受代理隧道 60 秒 UDP 会话空闲超时导致的周期性断线影响；同时卸载了代理核心的国内 UDP 会话负担。内置数据固定来自 CC0 授权的 ipverse RIR 委派快照（IPv4 5513 段 / IPv6 2033 段），支持运行时覆盖并提供可重复生成、逐行校验脚本。
 - 设置页「系统管理 → UDP 直连」：新增总开关（即时热生效），原「游戏 UDP 直连端口」保留为补充覆盖（海外目标但需直连的场景，如自建语音服）。
 #### DNS 上游现代化（forward 迁移 + 首次测速选优）
 
@@ -33,6 +20,8 @@
 - 修复 cloudflareredirect 包的 Windows 交叉编译：进程组设置按平台拆分（Setpgid）。
 - 修复 smart 内核资源校验测试在部分文件系统上因 mtime 粒度不足产生的间歇性失败。
 - 修复开发版本（如未注入版本号编译出的 0.1.0-dev）检查更新时的误导性提示：此前会谎报"已是最新版本"、更新状态甚至显示"更新完成"，而实际存在更新只是按保护策略禁用了自更新；现在会如实提示"检测到新版本 vX，当前为开发版本，已禁用在线更新"。
+- 完成 PR #13 合入前安全审计加固：GitHub Release 元数据不再经过公共镜像，自更新包要求独立可信的 GitHub SHA-256 摘要并在安装前复验；修复 `.lan/.local` 子串误匹配、DNS 测速接受 SERVFAIL/REFUSED、用户自带 Mihomo secret 被覆盖、只读用户写入全局自定义 CSS、gzip 协商与关闭阶段子进程重启竞态。
+- 本周期主体功能由 [Timeink88](https://github.com/Timeink88) 通过 PR #13 贡献，维护者在原 PR 分支完成安全、兼容性、测试与来源审计修复。
 
 #### 外观与皮肤系统
 
@@ -42,7 +31,7 @@
 
 #### GitHub 下载可靠性与 Token
 
-- 下载 GitHub 资源改为镜像优先路由，支持个人 Token 认证直连 GitHub（Token 不经公共镜像），下载失败自动换线路；面板新增加速器状态卡、Token 设置与限流提示。
+- GitHub Release 元数据始终通过 GitHub 官方 TLS 端点获取；公共镜像只承载已从可信元数据取得 SHA-256 摘要的资产文件。支持加密保存个人 Token、下载失败自动换线路，以及加速器状态卡与限流提示。
 
 #### 性能优化（速赢包）
 
@@ -72,52 +61,15 @@
 
 ### English
 
-#### PR review fixes (merge blockers)
-
-- Supply-chain hardening: GitHub Release metadata — the common origin of both
-  download URLs and SHA-256 digests — is no longer fetched through public
-  accelerator mirrors, so a hostile mirror can no longer forge a matching
-  URL/binary/digest triple that passes verification. Metadata only travels
-  over trusted routes (token / operator proxy / direct); mirrors serve
-  nothing but asset bytes whose digests were obtained on a trusted channel.
-  Asset URLs are validated as https://github.com release downloads, and the
-  self-updater validates its stored URL the same way before downloading.
-- Fixed web/package-lock.json lagging package.json (React 19.2.8 vs 19.2.6):
-  clean builds (npm ci) previously failed outright.
-- Fixed MosDNS reserved-TLD rules breaking legitimate domains: keyword:.lan /
-  .local are substring matches and rejected www.lancome.com / example.land;
-  they now use domain: anchoring (the TLD and its subdomains only).
-- Fixed custom Mihomo controller secrets locking MSF and Zashboard out of the
-  controller: a user-provided secret in the active config now actually wins
-  over the auto-generated value (injection skipped user secrets while
-  requests still read the generated one — any mismatch meant 401s).
-- Fixed the DNS benchmark scoring instant-SERVFAIL/REFUSED upstreams as
-  fast-and-usable: responses now require a terminal RCODE (NOERROR/NXDOMAIN)
-  and, for existing domains, at least one answer record — preventing
-  post-setup resolution outages.
-- Permission tightening: writing the global custom CSS now requires the
-  admin role (other appearance fields unchanged for non-guest users) — CSS
-  can rewrite the UI every user, including admins, sees.
-- Credentials are no longer echoed raw through the generic settings API:
-  github_token and mihomo_controller_secret are masked in
-  GET /api/v1/settings (dedicated endpoints still manage writes).
-- gzip negotiation now honors q values (gzip;q=0 / *;q=0 no longer receive
-  compressed bodies) and every response carries Vary: Accept-Encoding so
-  shared caches stop mixing representations.
-- The embedded CN CIDR snapshots now carry reproducible provenance: file
-  headers record the snapshot date, the factual-registry nature of the data,
-  and cross-verification against community daily lists (Rabbit-Spec/Surge,
-  Repcz/Tool); THIRD_PARTY_NOTICES.md gained a dedicated entry.
-- All Go files touched by this change set pass gofmt.
-
 #### Kernel-level CN UDP bypass (root fix for game disconnects)
 
 - New "CN UDP direct" capability (on by default): UDP traffic destined for
   CN IPs is released at the nftables kernel layer and never enters the proxy
   tunnel — every domestic game is immune to the proxy core's 60s idle UDP
   session timeout without any per-game configuration, and the core's CN UDP
-  session load is removed. CN CIDR lists ship embedded (6233 v4 / 3395 v6)
-  and can be overridden by runtime data files for future refreshes.
+  session load is removed. The embedded snapshot is pinned to the CC0 ipverse
+  RIR-delegation data (5513 v4 / 2033 v6), supports runtime overrides, and has
+  a reproducible per-CIDR validation script.
 - Settings → System → "UDP direct": a master toggle (hot-applied), with the
   previous game-UDP port list kept as a supplemental override for
   direct-but-overseas targets (e.g. self-hosted voice servers).
@@ -158,6 +110,15 @@
   newer release existed and self-update was merely held back by design.
   It now honestly reports "new version detected; self-update is disabled
   on development builds".
+- Hardened PR #13 before integration: GitHub Release metadata never transits
+  public mirrors; self-update requires an independently trusted GitHub SHA-256
+  digest and re-verifies it before installation. Also fixed `.lan/.local`
+  substring overmatching, DNS benchmarks accepting SERVFAIL/REFUSED, custom
+  Mihomo secret precedence, viewer writes to global custom CSS, gzip content
+  negotiation, and child restart races during shutdown.
+- The cycle's primary implementation was contributed by
+  [Timeink88](https://github.com/Timeink88) in PR #13; maintainers completed
+  the security, compatibility, test, and provenance hardening on that branch.
 
 #### Appearance & skin system
 
@@ -167,7 +128,7 @@
 
 #### GitHub download reliability & tokens
 
-- Mirror-first routing for GitHub assets with optional personal token auth (tokens never traverse public mirrors); automatic line switching on failure; accelerator status card, token setup and rate-limit hints in the panel.
+- GitHub Release metadata always comes from the official TLS endpoint; public mirrors carry only assets whose SHA-256 digest was obtained independently from trusted metadata. Personal tokens are encrypted at rest and never traverse public mirrors; automatic line switching, accelerator status, and rate-limit guidance remain available.
 
 #### Performance quick wins
 

@@ -103,7 +103,7 @@
 ### ① 控制器 secret ✅
 - 新增 `internal/server/mihomo_controller_secret.go`：首次启动生成 `randomHex(24)` 存设置项 `mihomo_controller_secret`（清空该设置=显式关闭认证）；secret 缓存在 App 内存（`renderMihomoYAML` 会在出厂重置事务内被调用，不能查库——这是修复过程中发现并消除的单连接死锁点）。
 - 注入三处：`renderMihomoYAML`（generated 模板+fallback）、`syncMihomoActiveConfigFromAppliedUserConfig`（custom 应用时，用户自带 secret 优先）、`ensureActiveMihomoControllerSecret`（升级兼容：已存在的 config.yaml 无 secret 时补写）。
-- MSF 客户端 `mihomoSecret()` 原本就优先读该设置 → 自动携带 Bearer。custom 配置校验新增「未设置 secret」warning；`mihomoProtectedFields` 文案更新。
+- MSF 客户端 `mihomoSecret()` 以活动配置为控制器真实来源；custom 配置自带值优先，generated 配置回落到缓存的托管值并自动携带 Bearer。custom 配置校验新增「未设置 secret」warning；`mihomoProtectedFields` 文案更新。
 - 前端：Mihomo 概览页新增 zashboard 入口 + 「复制 Secret」按钮（secret 从 config 读取，仅登录可见）。
 - **用户影响**：升级后 zashboard 首次连接需输入一次 secret（面板上有复制按钮）；脚本直接 curl 9090 需带 `Authorization: Bearer <secret>`。
 
@@ -122,7 +122,7 @@
 - 与 ③ 组合后事故 A 场景闭环：db 被写回 meta 但二进制+配置都是 smart → 启动即自动纠正 db，reconcile 通过，mihomo 照常运行。
 
 ### ⑤ 子进程自愈 ✅
-- `process.go`：Start 的 waiter goroutine 检测「desired 状态（service.X.enabled）仍为 true 时进程死亡」→ 自动退避重启（1s→2s→…→60s 封顶；稳定运行 2 分钟后重置退避；单服务单重启循环，幂等防竞态）。Stop/Restart 语义不变。
+- `process.go`：Start 的 waiter goroutine 检测「desired 状态（service.X.enabled）仍为 true 时进程死亡」→ 自动退避重启（1s→2s→…→60s 封顶；稳定运行 2 分钟后重置退避；单服务单重启循环，幂等防竞态）。`Shutdown` 会先关闭恢复门，防止父进程退出阶段的待处理退避任务重新拉起子进程；Stop/Restart 语义不变。
 - 验证方式：`pkill mosdns` 后应自动恢复（此前只能 `systemctl restart msf`）。
 
 ### ⑥ nft 退出清理 ✅（双保险）
@@ -149,7 +149,7 @@
 ### ⑪ 前端代码分割 + gzip ✅
 - `web/src/App.tsx`：全部 20+ 路由改 React.lazy，Suspense 统一挂在 `protectedRoute`（登录/Setup 亦懒加载）。
 - `web/vite.config.ts`：manualChunks 拆 react-vendor/echarts/editor/graphics/markdown。构建产物：单包 3.1MB → 首屏 index(155KB)+react-vendor(231KB)+AppShell(217KB)≈600KB（gzip 后约 195KB）；echarts 1.1MB/editor 394KB/graphics 924KB 均按需加载。
-- 新增 `internal/server/gzip.go`：Content-Type 白名单（json/html/css/js/svg）+ Accept-Encoding 协商的 gzip 中间件（SSE 与 WebSocket 天然排除；gzip writer 池化）。JSON 与静态资源透明压缩（3.3MB JSON 预期 → 数百 KB）。
+- 新增 `internal/server/gzip.go`：Content-Type 白名单（json/html/css/js/svg）+ 正确处理 q 值的 Accept-Encoding 协商、`Vary: Accept-Encoding` 和 gzip writer 池化（SSE 与 WebSocket 天然排除）。JSON 与静态资源透明压缩（3.3MB JSON 预期 → 数百 KB）。
 
 ### 验证记录
 - `CGO_ENABLED=0 GOOS=linux go build ./...` ✓、`go vet` ✓

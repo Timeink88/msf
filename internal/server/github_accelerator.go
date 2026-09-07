@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"database/sql"
+	"encoding/base64"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -40,7 +41,9 @@ const (
 	settingAcceleratorMode          = "github_accelerator_mode"           // auto|manual|off ("" = auto)
 	settingAcceleratorExtraPrefixes = "github_accelerator_extra_prefixes" // user-supplied, comma separated
 	settingAcceleratorBest          = "github_accelerator_last_best"      // observability: last winner
-	settingGitHubToken              = "github_token"                      // optional PAT, lifts api.github.com quota 60/h -> 5000/h
+	settingGitHubToken              = "github_token"                      // legacy plaintext key; migrated at startup
+	settingGitHubTokenCiphertext    = "github_token_ciphertext"
+	settingGitHubTokenNonce         = "github_token_nonce"
 )
 
 type acceleratorProbeResult struct {
@@ -71,13 +74,10 @@ type acceleratorManager struct {
 	probing  bool
 }
 
-var accelerators = &acceleratorManager{}
-
-// resetAcceleratorManagerForTest gives tests an empty cache and a injected
-// built-in pool; call with the original slice to restore.
+// resetAcceleratorManagerForTest replaces the template copied into each newly
+// constructed App; call with the original slice to restore it.
 func resetAcceleratorManagerForTest(original []string) {
-	accelerators = &acceleratorManager{}
-	builtinGitHubAcceleratorPrefixes = original
+	builtinGitHubAcceleratorPrefixes = append([]string(nil), original...)
 }
 
 func (a *App) acceleratorMode() string {
@@ -101,8 +101,12 @@ func (a *App) acceleratorMode() string {
 // acceleratorCandidates returns the probe pool: the operator's extras first
 // (most intentional), then the legacy manual URL, then the built-ins.
 func (a *App) acceleratorCandidates() []acceleratorCandidate {
+	mode := a.acceleratorMode()
+	if mode == "off" {
+		return nil
+	}
 	seen := map[string]bool{}
-	out := make([]acceleratorCandidate, 0, len(builtinGitHubAcceleratorPrefixes)+3)
+	out := make([]acceleratorCandidate, 0, len(a.acceleratorPrefixes)+3)
 	add := func(prefix, source string) {
 		prefix = strings.TrimRight(strings.TrimSpace(prefix), "/")
 		if prefix == "" || !(strings.HasPrefix(prefix, "https://") || strings.HasPrefix(prefix, "http://")) || seen[prefix] {
@@ -111,16 +115,14 @@ func (a *App) acceleratorCandidates() []acceleratorCandidate {
 		seen[prefix] = true
 		out = append(out, acceleratorCandidate{Prefix: prefix, Source: source})
 	}
+	if mode == "manual" {
+		add(a.manualAcceleratorPrefix(), "manual")
+		return out
+	}
 	for _, field := range strings.Split(a.setting(settingAcceleratorExtraPrefixes, ""), ",") {
 		add(field, "extra")
 	}
-	var enabled bool
-	var manual sql.NullString
-	_ = a.DB.QueryRow(`select github_accelerator_enabled,github_accelerator_url from system_setups order by id desc limit 1`).Scan(&enabled, &manual)
-	if enabled {
-		add(manual.String, "manual")
-	}
-	for _, prefix := range builtinGitHubAcceleratorPrefixes {
+	for _, prefix := range a.acceleratorPrefixes {
 		add(prefix, "builtin")
 	}
 	return out
@@ -171,14 +173,24 @@ func (a *App) probeGitHubAccelerators(ctx context.Context) []acceleratorProbeRes
 }
 
 func (a *App) refreshAcceleratorSnapshot(ctx context.Context) acceleratorSnapshot {
-	accelerators.mu.Lock()
-	if accelerators.probing || (time.Since(accelerators.probedAt) < acceleratorCacheTTL && accelerators.snapshot.Best != "") {
-		snapshot := accelerators.snapshot
-		accelerators.mu.Unlock()
+	manager := a.accelerators
+	mode := a.acceleratorMode()
+	manager.mu.Lock()
+	if mode == "off" {
+		snapshot := acceleratorSnapshot{Mode: mode, ProbedAt: time.Now()}
+		manager.snapshot = snapshot
+		manager.probedAt = snapshot.ProbedAt
+		manager.probing = false
+		manager.mu.Unlock()
 		return snapshot
 	}
-	accelerators.probing = true
-	accelerators.mu.Unlock()
+	if manager.probing || (time.Since(manager.probedAt) < acceleratorCacheTTL && manager.snapshot.Best != "") {
+		snapshot := manager.snapshot
+		manager.mu.Unlock()
+		return snapshot
+	}
+	manager.probing = true
+	manager.mu.Unlock()
 
 	results := a.probeGitHubAccelerators(ctx)
 	snapshot := acceleratorSnapshot{Mode: a.acceleratorMode(), ProbedAt: time.Now(), Results: results}
@@ -188,11 +200,11 @@ func (a *App) refreshAcceleratorSnapshot(ctx context.Context) acceleratorSnapsho
 			break
 		}
 	}
-	accelerators.mu.Lock()
-	accelerators.snapshot = snapshot
-	accelerators.probedAt = snapshot.ProbedAt
-	accelerators.probing = false
-	accelerators.mu.Unlock()
+	manager.mu.Lock()
+	manager.snapshot = snapshot
+	manager.probedAt = snapshot.ProbedAt
+	manager.probing = false
+	manager.mu.Unlock()
 	if snapshot.Best != "" {
 		a.setSetting(settingAcceleratorBest, snapshot.Best)
 	}
@@ -214,11 +226,12 @@ func (a *App) bestGitHubAccelerator() string {
 		// routes when the pinned accelerator actually breaks.
 		return a.manualAcceleratorPrefix()
 	}
-	accelerators.mu.Lock()
-	fresh := time.Since(accelerators.probedAt) < acceleratorCacheTTL
-	best := accelerators.snapshot.Best
-	warming := accelerators.probing
-	accelerators.mu.Unlock()
+	manager := a.accelerators
+	manager.mu.Lock()
+	fresh := time.Since(manager.probedAt) < acceleratorCacheTTL
+	best := manager.snapshot.Best
+	warming := manager.probing
+	manager.mu.Unlock()
 	if fresh || warming {
 		return best
 	}
@@ -240,12 +253,13 @@ func (a *App) manualAcceleratorPrefix() string {
 
 // markAcceleratorFailure invalidates the cached winner after a real download
 // through it failed, so the next attempt picks the runner-up.
-func markAcceleratorFailure(prefix string) {
-	accelerators.mu.Lock()
-	defer accelerators.mu.Unlock()
-	if accelerators.snapshot.Best == prefix {
-		accelerators.snapshot.Best = ""
-		accelerators.probedAt = time.Time{}
+func (a *App) markAcceleratorFailure(prefix string) {
+	manager := a.accelerators
+	manager.mu.Lock()
+	defer manager.mu.Unlock()
+	if manager.snapshot.Best == prefix {
+		manager.snapshot.Best = ""
+		manager.probedAt = time.Time{}
 	}
 }
 
@@ -311,23 +325,29 @@ func (a *App) handleGitHubAccelerators(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		if body.ResetToken {
-			a.setSetting(settingGitHubToken, "")
+			if err := a.clearGitHubToken(); err != nil {
+				writeJSON(w, http.StatusInternalServerError, map[string]any{"success": false, "error": "clear GitHub token: " + err.Error()})
+				return
+			}
 		} else if strings.TrimSpace(body.GitHubToken) != "" {
 			token := strings.TrimSpace(body.GitHubToken)
 			if len(token) < 16 || len(token) > 255 {
 				writeJSON(w, http.StatusBadRequest, map[string]any{"success": false, "error": "github token length looks invalid"})
 				return
 			}
-			a.setSetting(settingGitHubToken, token)
+			if err := a.saveGitHubToken(token); err != nil {
+				writeJSON(w, http.StatusInternalServerError, map[string]any{"success": false, "error": "save GitHub token: " + err.Error()})
+				return
+			}
 		}
 		// The candidate pool may have changed; force a fresh probe.
-		accelerators.mu.Lock()
-		accelerators.probedAt = time.Time{}
-		accelerators.mu.Unlock()
+		a.accelerators.mu.Lock()
+		a.accelerators.probedAt = time.Time{}
+		a.accelerators.mu.Unlock()
 	} else if r.Method == http.MethodPost {
-		accelerators.mu.Lock()
-		accelerators.probedAt = time.Time{}
-		accelerators.mu.Unlock()
+		a.accelerators.mu.Lock()
+		a.accelerators.probedAt = time.Time{}
+		a.accelerators.mu.Unlock()
 	}
 	snapshot := a.refreshAcceleratorSnapshot(r.Context())
 	extras := a.acceleratorExtraPrefixes()
@@ -365,13 +385,74 @@ func (a *App) setSettingChecked(key, value string) error {
 	return err
 }
 
+// migrateGitHubTokenStorage moves the short-lived plaintext representation
+// used by early PR builds into the same AES-GCM protected local secret store
+// as the assistant API key. The migration runs before the HTTP server starts.
+func (a *App) migrateGitHubTokenStorage() error {
+	legacy := strings.TrimSpace(a.setting(settingGitHubToken, ""))
+	if legacy == "" {
+		return nil
+	}
+	var encrypted string
+	if err := a.DB.QueryRow(`select value from settings where key=?`, settingGitHubTokenCiphertext).Scan(&encrypted); err == nil && strings.TrimSpace(encrypted) != "" {
+		_, err = a.DB.Exec(`delete from settings where key=?`, settingGitHubToken)
+		return err
+	}
+	return a.saveGitHubToken(legacy)
+}
+
+func (a *App) saveGitHubToken(token string) error {
+	token = strings.TrimSpace(token)
+	if token == "" {
+		return a.clearGitHubToken()
+	}
+	cipherText, nonce, err := a.encryptAssistantSecret(token)
+	if err != nil {
+		return err
+	}
+	tx, err := a.DB.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	now := time.Now()
+	for key, value := range map[string]string{
+		settingGitHubTokenCiphertext: base64.RawStdEncoding.EncodeToString(cipherText),
+		settingGitHubTokenNonce:      base64.RawStdEncoding.EncodeToString(nonce),
+	} {
+		if _, err := tx.Exec(`insert or replace into settings(key,value,updated_at) values(?,?,?)`, key, value, now); err != nil {
+			return err
+		}
+	}
+	if _, err := tx.Exec(`delete from settings where key=?`, settingGitHubToken); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func (a *App) clearGitHubToken() error {
+	_, err := a.DB.Exec(`delete from settings where key in (?,?,?)`, settingGitHubToken, settingGitHubTokenCiphertext, settingGitHubTokenNonce)
+	return err
+}
+
 // githubToken returns the optional Personal Access Token used for
 // api.github.com quota. Never send it through a public accelerator mirror.
 func (a *App) githubToken() string {
 	if a == nil || a.DB == nil {
 		return ""
 	}
-	return strings.TrimSpace(a.setting(settingGitHubToken, ""))
+	var cipherTextText, nonceText string
+	err := a.DB.QueryRow(`select c.value,n.value from settings c join settings n on n.key=? where c.key=?`, settingGitHubTokenNonce, settingGitHubTokenCiphertext).Scan(&cipherTextText, &nonceText)
+	if err == nil {
+		cipherText, decodeCipherErr := base64.RawStdEncoding.DecodeString(cipherTextText)
+		nonce, decodeNonceErr := base64.RawStdEncoding.DecodeString(nonceText)
+		if decodeCipherErr == nil && decodeNonceErr == nil {
+			if token, decryptErr := a.decryptAssistantSecret(cipherText, nonce); decryptErr == nil {
+				return strings.TrimSpace(token)
+			}
+		}
+	}
+	return ""
 }
 
 func maskGitHubToken(token string) string {

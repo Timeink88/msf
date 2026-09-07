@@ -220,9 +220,14 @@ func TestAppearanceExplicitQualitySurvivesDefaultAndUpgradeFallbacks(t *testing.
 func TestAppearanceSkinAndCustomCSSValidation(t *testing.T) {
 	app := newTestApp(t)
 	token := tokenForRole(t, app, "admin")
+	viewer := tokenForRole(t, app, "viewer")
 
 	if got := app.appearanceSettingsPayload()["skin"]; got != "amber" {
 		t.Fatalf("default skin mismatch: %q", got)
+	}
+	viewerCSS := requestJSON(t, app, http.MethodPut, "/api/v1/settings/appearance", viewer, map[string]any{"custom_css": "body { display: none; }"})
+	if viewerCSS.Code != http.StatusForbidden {
+		t.Fatalf("viewer changed global custom CSS: status=%d body=%s", viewerCSS.Code, viewerCSS.Body.String())
 	}
 
 	badSkin := requestJSON(t, app, http.MethodPut, "/api/v1/settings/appearance", token, map[string]any{"skin": "neon"})
@@ -570,7 +575,7 @@ func TestAppearanceCustomCSSRequiresAdmin(t *testing.T) {
 	}
 }
 
-func TestSettingsGetMasksCredentials(t *testing.T) {
+func TestSettingsGetRedactsCredentials(t *testing.T) {
 	app := newTestApp(t)
 	app.setSetting(settingGitHubToken, "ghp_token1234567890abcdef")
 	app.setSetting(mihomoControllerSecretSettingKey, "0123456789abcdef0123456789abcdef01234567")
@@ -585,7 +590,10 @@ func TestSettingsGetMasksCredentials(t *testing.T) {
 			t.Fatalf("credential leaked through generic settings GET: %s", raw)
 		}
 	}
-	if !strings.Contains(body, "ghp_******cdef") {
-		t.Fatalf("masked github token missing from response: %s", body)
+	if strings.Contains(body, "ghp_******cdef") || strings.Contains(body, settingGitHubTokenCiphertext) || strings.Contains(body, settingGitHubTokenNonce) {
+		t.Fatalf("GitHub token material should be omitted from the generic settings response: %s", body)
+	}
+	if !strings.Contains(body, "0123******4567") {
+		t.Fatalf("masked Mihomo controller secret missing from response: %s", body)
 	}
 }

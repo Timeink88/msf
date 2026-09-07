@@ -96,7 +96,7 @@ func (a *App) ShutdownRuntime(ctx context.Context) error {
 	if err := restorePlatformNetwork(ctx, a, cfg); err != nil {
 		errs = append(errs, err)
 	}
-	if err := a.Services.StopAll(ctx); err != nil {
+	if err := a.Services.Shutdown(ctx); err != nil {
 		errs = append(errs, err)
 	}
 	// While msf is down its nft redirect target (7877/7896) is gone; leftover

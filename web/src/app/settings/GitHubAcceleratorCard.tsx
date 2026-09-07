@@ -57,15 +57,17 @@ function viaLabel(via: string) {
       return "Token 认证";
     case "proxy":
       return "代理/直连";
+    case "github":
+      return "GitHub 官方元数据";
     default:
       return via || "";
   }
 }
 
 const modeOptions: Array<{ value: AcceleratorMode; label: string; hint: string }> = [
-  { value: "auto", label: "自动探测", hint: "内置公共镜像 + 自建镜像一起测速，自动选最快可用线路；失败自动换线，最后回退代理/直连" },
+  { value: "auto", label: "自动探测", hint: "发布元数据始终来自 GitHub 官方；资产文件在通过可信 SHA-256 校验的前提下自动选择最快镜像" },
   { value: "manual", label: "手动指定", hint: "只使用下方手动填写的加速地址，不经测速；失败仍会自动回退代理/直连" },
-  { value: "off", label: "关闭", hint: "不使用任何加速镜像，GitHub 请求只走代理或直连" },
+  { value: "off", label: "关闭", hint: "资产文件不使用任何加速镜像，GitHub 请求只走代理或直连" },
 ];
 
 export function GitHubAcceleratorCard({
@@ -139,7 +141,7 @@ export function GitHubAcceleratorCard({
         <div>
           <h4 className="text-base font-semibold text-foreground">GitHub 加速镜像</h4>
           <p className="mt-1 text-xs text-muted-foreground">
-            组件下载与版本更新默认优先走加速镜像，失败自动换线并回退代理/直连
+            发布元数据固定走 GitHub 官方 TLS；校验摘要可信后，资产文件优先走加速镜像
           </p>
         </div>
         <button
@@ -364,7 +366,7 @@ export function GitHubAcceleratorCard({
             ) : null}
           </div>
           <p className="mt-2 text-[11px] leading-relaxed text-muted-foreground">
-            配置后 API 限额提升至 5000 次/小时，且认证请求不再经过公共镜像（防止 Token 泄漏）。获取步骤：GitHub
+            Token 使用本机密钥加密保存；配置后 API 限额提升至 5000 次/小时，且认证请求不经过公共镜像。获取步骤：GitHub
             网页 → 右上角头像 → Settings → Developer settings → Personal access tokens → Tokens (classic) →
             Generate new token，权限全部不勾（公开仓库只读即可），复制生成的一次性令牌粘贴到此处。
           </p>

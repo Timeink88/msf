@@ -365,19 +365,23 @@ func TestMihomoAlphaMetadataNormalizesToMeta(t *testing.T) {
 func TestComponentDownloadAssetFromReleaseRequiresDigest(t *testing.T) {
 	app := newTestApp(t)
 	digest := testSHA256Digest([]byte("dist archive"))
-	assetURL := "https://github.com/Zephyruso/zashboard/releases/download/v1.0.0/dist.zip"
 	release := githubRelease{Assets: []githubAsset{{
 		Name:               "dist.zip",
-		BrowserDownloadURL: assetURL,
+		BrowserDownloadURL: "https://github.com/Zephyruso/zashboard/releases/download/v1/dist.zip",
 		Digest:             digest,
 	}}}
 	asset, err := app.componentDownloadAssetFromRelease("zashboard", release)
 	if err != nil {
 		t.Fatalf("componentDownloadAssetFromRelease returned error: %v", err)
 	}
-	if asset.URL != assetURL || asset.Digest != digest || asset.VerificationSource != componentVerificationSourceGitHubAssetDigest {
+	if asset.URL != release.Assets[0].BrowserDownloadURL || asset.Digest != digest || asset.VerificationSource != componentVerificationSourceGitHubAssetDigest {
 		t.Fatalf("unexpected asset metadata: %#v", asset)
 	}
+	release.Assets[0].BrowserDownloadURL = "https://example.invalid/dist.zip"
+	if _, err := app.componentDownloadAssetFromRelease("zashboard", release); err == nil || !strings.Contains(err.Error(), "untrusted download URL") {
+		t.Fatalf("untrusted browser download URL should fail, got %v", err)
+	}
+	release.Assets[0].BrowserDownloadURL = "https://github.com/Zephyruso/zashboard/releases/download/v1/dist.zip"
 
 	release.Assets[0].Digest = ""
 	if _, err := app.componentDownloadAssetFromRelease("zashboard", release); err == nil || !strings.Contains(err.Error(), "no valid SHA-256 digest") {
@@ -756,6 +760,7 @@ func TestSelfUpdateDownloadFailurePersistsStatusEvents(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
 	rawURL := server.URL + "/msf-linux-amd64.tar.gz"
 	server.Close()
+	app.setSetting(selfUpdateDownloadDigestKey, testSHA256Digest([]byte("unreachable")))
 	now := time.Now()
 	if _, err := app.DB.Exec(`insert into update_info(component,current_version,latest_version,has_update,status,progress,error_message,download_url,release_notes,last_check_time,created_at,updated_at)
 		values('msf',?,?,?,?,?,?,?,?,?,?,?)`, app.Version, "v9.9.9", true, "checked", 0, "", rawURL, "", now, now, now); err != nil {
@@ -786,6 +791,7 @@ func TestSelfUpdateDownloadSuccessPersistsProgressAndEvents(t *testing.T) {
 	}))
 	defer server.Close()
 	rawURL := server.URL + "/msf-linux-amd64.tar.gz"
+	app.setSetting(selfUpdateDownloadDigestKey, testSHA256Digest([]byte("hello update")))
 	now := time.Now()
 	if _, err := app.DB.Exec(`insert into update_info(component,current_version,latest_version,has_update,status,progress,error_message,download_url,release_notes,last_check_time,created_at,updated_at)
 		values('msf',?,?,?,?,?,?,?,?,?,?,?)`, app.Version, "v9.9.9", true, "checked", 0, "", rawURL, "", now, now, now); err != nil {

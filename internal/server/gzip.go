@@ -44,50 +44,33 @@ func compressibleContentType(contentType string) bool {
 // 依赖 Vary: Accept-Encoding 区分两种表示。
 func clientAcceptsGzip(r *http.Request) bool {
 	encoding := r.Header.Get("Accept-Encoding")
-	if encoding == "" {
-		return false
-	}
-	gzipSeen := false
-	gzipOK := false
-	starSeen := false
-	starOK := false
-	starZero := false
+	wildcardQuality := 0.0
+	hasWildcard := false
 	for _, part := range strings.Split(encoding, ",") {
 		fields := strings.Split(part, ";")
 		name := strings.ToLower(strings.TrimSpace(fields[0]))
-		if name != "gzip" && name != "*" {
-			continue
-		}
-		q := 1.0
-		for _, param := range fields[1:] {
-			param = strings.TrimSpace(param)
-			if len(param) < 2 || !strings.EqualFold(param[:2], "q=") {
+		quality := 1.0
+		for _, parameter := range fields[1:] {
+			key, value, found := strings.Cut(strings.TrimSpace(parameter), "=")
+			if !found || !strings.EqualFold(strings.TrimSpace(key), "q") {
 				continue
 			}
-			if parsed, err := strconv.ParseFloat(param[2:], 64); err == nil {
-				q = parsed
-			}
-		}
-		switch name {
-		case "gzip":
-			gzipSeen = true
-			gzipOK = q > 0
-		case "*":
-			starSeen = true
-			if q <= 0 {
-				starZero = true
+			parsed, err := strconv.ParseFloat(strings.TrimSpace(value), 64)
+			if err != nil || parsed < 0 || parsed > 1 {
+				quality = 0
 			} else {
-				starOK = true
+				quality = parsed
 			}
 		}
+		if name == "gzip" {
+			return quality > 0
+		}
+		if name == "*" {
+			hasWildcard = true
+			wildcardQuality = quality
+		}
 	}
-	if gzipSeen {
-		return gzipOK
-	}
-	if starZero {
-		return false
-	}
-	return starSeen && starOK
+	return hasWildcard && wildcardQuality > 0
 }
 
 type gzipResponseWriter struct {
@@ -142,9 +125,9 @@ func (g *gzipResponseWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
 func (g *gzipResponseWriter) finish() {
 	if g.compressing {
 		_ = g.gz.Close()
-		g.gz.Reset(io.Discard)
-		gzipWriterPool.Put(g.gz)
 	}
+	g.gz.Reset(io.Discard)
+	gzipWriterPool.Put(g.gz)
 }
 
 // withResponseCompression wraps next for clients that advertise gzip support.
