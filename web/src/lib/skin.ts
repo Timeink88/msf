@@ -9,7 +9,7 @@ export type SkinId = "amber" | "classic";
 export const SKIN_STORAGE_KEY = "msf-skin";
 export const CUSTOM_CSS_STORAGE_KEY = "msf-custom-css";
 export const CUSTOM_CSS_STYLE_ID = "msf-custom-css";
-export const DEFAULT_SKIN: SkinId = "amber";
+export const DEFAULT_SKIN: SkinId = "classic";
 
 export const skinOptions: Array<{ id: SkinId; label: string; description: string }> = [
   {

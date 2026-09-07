@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"database/sql"
 	"encoding/base64"
 	"encoding/json"
@@ -10,6 +11,11 @@ import (
 	"strings"
 	"sync"
 	"time"
+)
+
+const (
+	manualAcceleratorProbeTarget  = "https://raw.githubusercontent.com/scoltzero/msf/main/README.md"
+	manualAcceleratorProbeTimeout = 6 * time.Second
 )
 
 const (
@@ -33,10 +39,80 @@ func (a *App) manualAcceleratorPrefix() string {
 	return prefix
 }
 
+type manualAcceleratorProbeResult struct {
+	Prefix    string    `json:"prefix"`
+	OK        bool      `json:"ok"`
+	LatencyMS int64     `json:"latency_ms"`
+	Status    int       `json:"status,omitempty"`
+	Error     string    `json:"error,omitempty"`
+	ProbedAt  time.Time `json:"probed_at"`
+}
+
+func (a *App) githubDownloadRouteName() string {
+	if a.downloadProxyURL() != nil {
+		return "proxy"
+	}
+	if a.manualAcceleratorPrefix() != "" {
+		return "manual"
+	}
+	if a.runningMihomoDownloadProxyURL() != nil {
+		return "mihomo"
+	}
+	return "github"
+}
+
+// probeManualAccelerator checks only the single URL entered by the operator.
+// It never discovers alternatives, changes routing, stores a winner, or sends
+// the GitHub token to the accelerator.
+func (a *App) probeManualAccelerator(ctx context.Context) manualAcceleratorProbeResult {
+	prefix := a.manualAcceleratorPrefix()
+	result := manualAcceleratorProbeResult{Prefix: prefix, ProbedAt: time.Now()}
+	if prefix == "" {
+		result.Error = "尚未配置手动加速源"
+		return result
+	}
+
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.Proxy = nil
+	client := &http.Client{Timeout: manualAcceleratorProbeTimeout, Transport: transport}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, prefix+"/"+manualAcceleratorProbeTarget, nil)
+	if err != nil {
+		result.Error = err.Error()
+		return result
+	}
+	req.Header.Set("Range", "bytes=0-2047")
+	req.Header.Set("User-Agent", "msf-manual-accelerator-check/1.0")
+	started := time.Now()
+	resp, err := client.Do(req)
+	result.LatencyMS = time.Since(started).Milliseconds()
+	if err != nil {
+		result.Error = err.Error()
+		return result
+	}
+	defer resp.Body.Close()
+	result.Status = resp.StatusCode
+	written, readErr := io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
+	if readErr != nil {
+		result.Error = readErr.Error()
+		return result
+	}
+	if (resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusPartialContent) || written <= 100 {
+		result.Error = "加速源未返回有效内容"
+		return result
+	}
+	result.OK = true
+	return result
+}
+
 // handleGitHubAccelerators retains the authenticated token endpoint and a
 // backwards-compatible manual-prefix setter. Automatic mirror discovery was
 // intentionally removed: every accelerator URL must come from the operator.
 func (a *App) handleGitHubAccelerators(w http.ResponseWriter, r *http.Request) {
+	var probe *manualAcceleratorProbeResult
+	if r.Method == http.MethodPost {
+		checked := a.probeManualAccelerator(r.Context())
+		probe = &checked
+	}
 	if r.Method == http.MethodPut {
 		var body struct {
 			ManualPrefix *string `json:"manual_prefix"`
@@ -77,6 +153,8 @@ func (a *App) handleGitHubAccelerators(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"success": true, "data": map[string]any{
 		"manual_prefix":       a.manualAcceleratorPrefix(),
+		"current_route":       a.githubDownloadRouteName(),
+		"probe":               probe,
 		"github_token_masked": maskGitHubToken(a.githubToken()),
 		"rate_limit":          lastGitHubRateLimit.snapshot(),
 	}})

@@ -1498,7 +1498,7 @@ function SystemTab({ showToast, isAdmin }: { showToast: (message: string) => voi
         )}
       </Card>
 
-      <Card title="GitHub Token" Icon={KeyRound}>
+      <Card title="GitHub 下载线路与 Token" Icon={KeyRound}>
         <GitHubAcceleratorCard />
       </Card>
 

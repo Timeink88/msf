@@ -27,11 +27,12 @@
 
 - 修复每次重启后外观被重置：登录 token 过期触发的会话清理不再连带删除主题/皮肤偏好，外观设置全量同步到后端 SQLite（重启/换浏览器/换设备均不丢）。
 - 新增皮肤系统：琥珀暖白与经典玻璃两套，与明暗模式独立；设置页新增品牌主色调色盘（预设色板+取色器实时预览）。
+- 默认皮肤保持经典玻璃（MSF 原生蓝）；选择琥珀暖白后，登录页动态波浪同步读取琥珀明暗色板，不再停留在经典蓝色。
 - 调色工作台：主色全局化（侧栏/分段控件/图表五色/氛围光/文字选中色全部跟随主色）、氛围色相滑条、自定义 CSS 编辑器（模板一键填入、300ms 防抖实时预览、撤销预览）。
 
 #### GitHub 下载可靠性与 Token
 
-- GitHub Release 元数据始终通过 GitHub 官方 TLS 端点获取；资产下载只使用管理员主动填写的代理服务器或加速镜像源，系统不再内置、探测、排序或自动切换公共镜像。个人 Token 继续加密保存，资产仍需通过可信 SHA-256 校验。
+- GitHub Release 元数据始终通过 GitHub 官方 TLS 端点获取；资产下载只使用管理员主动填写的代理服务器或加速镜像源，系统不再内置、自动探测、排序或自动切换公共镜像。面板可按需检测当前手填的单一加速源，检测结果不改变线路；个人 Token 继续加密保存，资产仍需通过可信 SHA-256 校验。
 
 #### 性能优化（速赢包）
 
@@ -124,11 +125,12 @@
 
 - Fixed preferences being wiped on every restart: session cleanup triggered by token expiry no longer deletes appearance keys; appearance settings now fully synced to backend SQLite.
 - Skin system: Amber (warm-white glass) and Classic glass skins, independent of light/dark mode; brand accent color picker with live preview.
+- Classic glass (the original MSF blue) remains the default. Selecting Amber now also updates the login page's animated waves from the skin's light/dark palette.
 - Color studio: globalized accent (sidebar/segments/chart palette/atmosphere/selection follow the accent), atmosphere hue slider, custom CSS editor with template fill, debounced live preview and undo.
 
 #### GitHub download reliability & tokens
 
-- GitHub Release metadata always comes from the official TLS endpoint. Asset downloads use only an administrator-supplied proxy or accelerator prefix; MSF no longer bundles, probes, ranks, or automatically switches public mirrors. Personal tokens remain encrypted at rest, and assets still require a trusted SHA-256 digest.
+- GitHub Release metadata always comes from the official TLS endpoint. Asset downloads use only an administrator-supplied proxy or accelerator prefix; MSF no longer bundles, automatically probes, ranks, or switches public mirrors. The panel can explicitly test only the configured accelerator without changing routing. Personal tokens remain encrypted at rest, and assets still require a trusted SHA-256 digest.
 
 #### Performance quick wins
 

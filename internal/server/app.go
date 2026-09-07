@@ -430,6 +430,7 @@ func (a *App) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v1/system/startup-issues", a.handleStartupIssues)
 	mux.HandleFunc("GET /api/v1/github/accelerators", a.handleGitHubAccelerators)
 	mux.HandleFunc("PUT /api/v1/github/accelerators", a.handleGitHubAccelerators)
+	mux.HandleFunc("POST /api/v1/github/accelerators/probe", a.handleGitHubAccelerators)
 	mux.HandleFunc("GET /api/v1/network/info", a.handleNetworkInfo)
 	a.registerNetworkRuntimeRoutes(mux)
 	mux.HandleFunc("POST /api/v1/network/apply", a.handleNFTApply)

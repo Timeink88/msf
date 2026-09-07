@@ -156,6 +156,40 @@ func TestGitHubAccessPUTStoresOnlyManualConfigurationAndMaskedToken(t *testing.T
 	}
 }
 
+func TestManualAcceleratorProbeChecksOnlyConfiguredPrefix(t *testing.T) {
+	var hits atomic.Int32
+	var requestURI string
+	mirror := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		requestURI = r.RequestURI
+		_, _ = w.Write([]byte(strings.Repeat("manual-probe-", 32)))
+	}))
+	defer mirror.Close()
+
+	app := newTestApp(t)
+	setManualAcceleratorForTest(t, app, mirror.URL)
+	token := tokenForRole(t, app, "admin")
+	res := requestJSON(t, app, http.MethodPost, "/api/v1/github/accelerators/probe", token, nil)
+	if res.Code != http.StatusOK || !strings.Contains(res.Body.String(), `"ok":true`) || !strings.Contains(res.Body.String(), `"current_route":"manual"`) {
+		t.Fatalf("manual accelerator probe failed: status=%d body=%s", res.Code, res.Body.String())
+	}
+	if hits.Load() != 1 {
+		t.Fatalf("manual accelerator was probed %d times, want exactly once", hits.Load())
+	}
+	if !strings.Contains(requestURI, manualAcceleratorProbeTarget) {
+		t.Fatalf("probe URI %q does not contain official target %q", requestURI, manualAcceleratorProbeTarget)
+	}
+
+	setManualAcceleratorForTest(t, app, "")
+	res = requestJSON(t, app, http.MethodPost, "/api/v1/github/accelerators/probe", token, nil)
+	if res.Code != http.StatusOK || !strings.Contains(res.Body.String(), `"ok":false`) || !strings.Contains(res.Body.String(), "尚未配置手动加速源") {
+		t.Fatalf("empty manual accelerator probe should report unavailable: status=%d body=%s", res.Code, res.Body.String())
+	}
+	if hits.Load() != 1 {
+		t.Fatalf("empty configuration triggered an additional probe: hits=%d", hits.Load())
+	}
+}
+
 func TestOnlyExplicitProxyOrAcceleratorChangesDownloadRoute(t *testing.T) {
 	app := newTestApp(t)
 	setManualAcceleratorForTest(t, app, "")

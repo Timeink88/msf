@@ -10,9 +10,13 @@ describe("GitHub download routing UI", () => {
     for (const source of [settings, tokenCard, setup]) {
       expect(source).not.toContain("gh-proxy.com");
       expect(source).not.toContain("ghfast.top");
-      expect(source).not.toContain("/api/v1/github/accelerators/probe");
     }
     expect(settings).toContain("系统不预置、不探测，也不会自动切换镜像");
     expect(setup).toContain("留空不会启用任何加速源");
+    expect(tokenCard).toContain('"/api/v1/github/accelerators/probe"');
+    expect(tokenCard).toContain("仅在点击按钮时检测上方这一个手填地址；结果不改变下载线路");
+    expect(tokenCard).not.toContain("modeOptions");
+    expect(tokenCard).not.toContain("extra_prefixes");
+    expect(tokenCard).not.toContain("best_prefix");
   });
 });

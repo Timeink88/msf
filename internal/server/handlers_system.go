@@ -971,7 +971,7 @@ func (a *App) appearanceSettingsPayload() map[string]string {
 		"language":                    a.setting("appearance.language", a.setting("language", "zh-CN")),
 		"scene":                       a.setting("appearance.scene", a.setting("scene", "dynamic")),
 		"quality":                     a.setting("appearance.quality", a.setting("quality", "balanced")),
-		"skin":                        a.setting("appearance.skin", "amber"),
+		"skin":                        a.setting("appearance.skin", "classic"),
 		"custom_css":                  a.setting("appearance.custom_css", ""),
 		"accent_color":                a.setting("appearance.accent_color", ""),
 		"skin_tint":                   a.setting("appearance.skin_tint", ""),

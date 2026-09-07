@@ -112,7 +112,7 @@ func TestAppearanceOpacityAPIsAtomicAndConsistent(t *testing.T) {
 	if initial.Code != http.StatusOK {
 		t.Fatalf("appearance GET failed: status=%d body=%s", initial.Code, initial.Body.String())
 	}
-	for _, want := range []string{`"theme":"system"`, `"language":"zh-CN"`, `"scene":"dynamic"`, `"quality":"balanced"`, `"skin":"amber"`, `"custom_css":""`, `"content_plate_opacity_subtle":"56"`, `"content_plate_opacity_regular":"70"`, `"content_plate_opacity_strong":"84"`} {
+	for _, want := range []string{`"theme":"system"`, `"language":"zh-CN"`, `"scene":"dynamic"`, `"quality":"balanced"`, `"skin":"classic"`, `"custom_css":""`, `"content_plate_opacity_subtle":"56"`, `"content_plate_opacity_regular":"70"`, `"content_plate_opacity_strong":"84"`} {
 		if !strings.Contains(initial.Body.String(), want) {
 			t.Fatalf("appearance GET missing %s: %s", want, initial.Body.String())
 		}
@@ -222,7 +222,7 @@ func TestAppearanceSkinAndCustomCSSValidation(t *testing.T) {
 	token := tokenForRole(t, app, "admin")
 	viewer := tokenForRole(t, app, "viewer")
 
-	if got := app.appearanceSettingsPayload()["skin"]; got != "amber" {
+	if got := app.appearanceSettingsPayload()["skin"]; got != "classic" {
 		t.Fatalf("default skin mismatch: %q", got)
 	}
 	viewerCSS := requestJSON(t, app, http.MethodPut, "/api/v1/settings/appearance", viewer, map[string]any{"custom_css": "body { display: none; }"})
@@ -238,19 +238,19 @@ func TestAppearanceSkinAndCustomCSSValidation(t *testing.T) {
 	if badCSS.Code != http.StatusBadRequest {
 		t.Fatalf("oversized custom_css should fail: status=%d body=%s", badCSS.Code, badCSS.Body.String())
 	}
-	if got := app.appearanceSettingsPayload()["skin"]; got != "amber" {
+	if got := app.appearanceSettingsPayload()["skin"]; got != "classic" {
 		t.Fatalf("failed updates changed skin: %q", got)
 	}
 
 	valid := requestJSON(t, app, http.MethodPut, "/api/v1/settings/appearance", token, map[string]any{
-		"skin":       "classic",
+		"skin":       "amber",
 		"custom_css": ":root { --primary: #f97316; }",
 	})
 	if valid.Code != http.StatusOK {
 		t.Fatalf("valid skin/custom_css update failed: status=%d body=%s", valid.Code, valid.Body.String())
 	}
 	after := requestJSON(t, app, http.MethodGet, "/api/v1/settings/appearance", token, nil)
-	for _, want := range []string{`"skin":"classic"`, `"custom_css":":root { --primary: #f97316; }"`} {
+	for _, want := range []string{`"skin":"amber"`, `"custom_css":":root { --primary: #f97316; }"`} {
 		if !strings.Contains(after.Body.String(), want) {
 			t.Fatalf("appearance GET missing %s: %s", want, after.Body.String())
 		}
@@ -263,13 +263,13 @@ func TestAppearanceSkinAndCustomCSSValidation(t *testing.T) {
 		t.Fatalf("structured invalid skin should fail: status=%d body=%s", badStructured.Code, badStructured.Body.String())
 	}
 	validStructured := requestJSON(t, app, http.MethodPut, "/api/v1/settings/structured", token, map[string]any{
-		"appearance": map[string]any{"skin": "amber", "custom_css": ""},
+		"appearance": map[string]any{"skin": "classic", "custom_css": ""},
 	})
 	if validStructured.Code != http.StatusOK {
 		t.Fatalf("structured skin update failed: status=%d body=%s", validStructured.Code, validStructured.Body.String())
 	}
 	payload := app.appearanceSettingsPayload()
-	if payload["skin"] != "amber" || payload["custom_css"] != "" {
+	if payload["skin"] != "classic" || payload["custom_css"] != "" {
 		t.Fatalf("structured update did not persist: %#v", payload)
 	}
 }

@@ -7,6 +7,8 @@ const shell = readFileSync(new URL("../../components/AppShell.tsx", import.meta.
 const login = readFileSync(new URL("../../app/login/page.tsx", import.meta.url), "utf8");
 const scene = readFileSync(new URL("../../components/liquid-glass/SceneBackdrop.tsx", import.meta.url), "utf8");
 const sceneStyles = readFileSync(new URL("../../styles/liquid-glass-scenes.css", import.meta.url), "utf8");
+const skin = readFileSync(new URL("../../lib/skin.ts", import.meta.url), "utf8");
+const amberSkin = readFileSync(new URL("../../styles/skin-amber.css", import.meta.url), "utf8");
 
 describe("appearance initialization contract", () => {
   it("defaults new browsers to dynamic balanced without overriding explicit quality", () => {
@@ -17,6 +19,16 @@ describe("appearance initialization contract", () => {
     expect(login).toContain("normalizeGlassQuality(root.dataset.garyQuality)");
     expect(login).toContain("maxRenderPixels={qualityProfile.pixels}");
     expect(login).toContain("maxDpr={qualityProfile.dpr}");
+  });
+
+  it("keeps classic glass as the default skin and lets login waves follow skin tokens", () => {
+    expect(skin).toContain('DEFAULT_SKIN: SkinId = "classic"');
+    expect(login).toContain('attributeFilter: ["class", "data-gary-scene", "data-gary-quality", "data-skin"]');
+    expect(login).toContain('getPropertyValue("--gary-scene-wave-horizon")');
+    expect(login).toContain('getPropertyValue("--gary-scene-wave")');
+    expect(login).toContain('getPropertyValue("--gary-scene-wave-crest")');
+    expect(amberSkin).toContain('--gary-scene-wave: #7a4a24');
+    expect(amberSkin).toContain('--gary-scene-wave-crest: #fb923c');
   });
 
   it("uses the complete v0.4.7.x scene on both the app shell and login", () => {

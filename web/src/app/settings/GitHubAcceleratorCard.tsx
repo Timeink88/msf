@@ -1,10 +1,20 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { Loader2, ShieldCheck, TriangleAlert } from "lucide-react";
+import { Loader2, RefreshCw, ShieldCheck, TriangleAlert } from "lucide-react";
 import { api, apiData } from "@/lib/api";
 
 interface GitHubAccessSnapshot {
+  manual_prefix: string;
+  current_route: "proxy" | "manual" | "mihomo" | "github";
+  probe?: {
+    prefix: string;
+    ok: boolean;
+    latency_ms: number;
+    status?: number;
+    error?: string;
+    probed_at: string;
+  } | null;
   github_token_masked: string;
   rate_limit?: {
     limit: number;
@@ -13,6 +23,19 @@ interface GitHubAccessSnapshot {
     via: string;
     observed_at: string;
   } | null;
+}
+
+function routeLabel(route: GitHubAccessSnapshot["current_route"]) {
+  switch (route) {
+    case "proxy":
+      return "手动代理服务器";
+    case "manual":
+      return "手动加速镜像源";
+    case "mihomo":
+      return "Mihomo 出口";
+    default:
+      return "GitHub 官方直连";
+  }
 }
 
 const inputClass =
@@ -35,10 +58,13 @@ export function GitHubAcceleratorCard() {
   const [busy, setBusy] = useState(false);
   const [tokenDraft, setTokenDraft] = useState("");
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (probe = false) => {
     setBusy(true);
     try {
-      const payload = await api("/api/v1/github/accelerators");
+      const payload = await api(
+        probe ? "/api/v1/github/accelerators/probe" : "/api/v1/github/accelerators",
+        probe ? { method: "POST" } : undefined,
+      );
       if (payload?.success) {
         setSnapshot(apiData<GitHubAccessSnapshot>(payload));
         setLoadError("");
@@ -83,7 +109,7 @@ export function GitHubAcceleratorCard() {
   return (
     <div className="space-y-3">
       <p className="text-sm leading-relaxed text-muted-foreground">
-        代理服务器和加速镜像源只使用你在“初始化配置”中手动填写的地址；MSF 不预置、不探测，也不会自动切换镜像。
+        代理服务器和加速镜像源只使用你在“初始化配置”中手动填写的地址；MSF 不预置、不自动探测，也不会自动切换镜像。
       </p>
 
       {loadError ? (
@@ -92,6 +118,40 @@ export function GitHubAcceleratorCard() {
           {loadError}
         </p>
       ) : null}
+
+      <div className="rounded-md border border-border/60 bg-card/55 p-3">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <p className="text-xs font-medium text-foreground">手动加速源检测</p>
+            <p className="mt-1 text-[11px] text-muted-foreground">
+              当前下载线路：{snapshot ? routeLabel(snapshot.current_route) : "正在读取"}
+            </p>
+          </div>
+          <button
+            type="button"
+            disabled={busy || !snapshot?.manual_prefix}
+            onClick={() => void load(true)}
+            className="inline-flex h-9 items-center gap-1.5 rounded-md border border-border bg-background px-3 text-xs font-medium text-muted-foreground transition-colors hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}
+            检测手动加速源
+          </button>
+        </div>
+        <p className="mt-2 break-all font-mono text-[11px] text-foreground">
+          {snapshot?.manual_prefix || "尚未填写加速前缀"}
+        </p>
+        {snapshot?.probe ? (
+          <p className={`mt-2 text-[11px] ${snapshot.probe.ok ? "text-emerald-600" : "text-destructive"}`}>
+            {snapshot.probe.ok
+              ? `连接正常 · ${snapshot.probe.latency_ms}ms · HTTP ${snapshot.probe.status || "-"}`
+              : `检测失败：${snapshot.probe.error || "未返回有效内容"}`}
+          </p>
+        ) : (
+          <p className="mt-2 text-[11px] text-muted-foreground">
+            仅在点击按钮时检测上方这一个手填地址；结果不改变下载线路。
+          </p>
+        )}
+      </div>
 
       <div className="flex flex-wrap items-center justify-between gap-2">
         <span className="text-xs font-medium text-foreground">Personal Access Token（可选）</span>
