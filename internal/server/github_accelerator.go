@@ -16,9 +16,11 @@ import (
 // Public GitHub accelerator prefixes, ordered by historical reliability.
 // These services come and go (ghp.ci / ghgo.xyz are already dead, and even
 // the long-lived gh-proxy.com rotated domains) — which is exactly why the
-// winner is chosen by probing, never by trusting this list.  Downloads are
-// still protected end-to-end by the SHA-256 digests from the GitHub release
-// API, so a hijacked accelerator cannot serve tampered binaries.
+// winner is chosen by probing, never by trusting this list.  Mirrors are
+// download-only: release METADATA (the source of the SHA-256 digests) is
+// fetched exclusively from api.github.com over trusted routes — see
+// fetchGitHubJSONContext — so a hijacked accelerator can only serve bytes
+// that still have to match a trusted digest.
 var builtinGitHubAcceleratorPrefixes = []string{
 	"https://gh-proxy.com/",
 	"https://ghfast.top/",
@@ -51,9 +53,9 @@ type acceleratorProbeResult struct {
 }
 
 type acceleratorSnapshot struct {
-	Best     string                    `json:"best_prefix"`
-	Mode     string                    `json:"mode"`
-	ProbedAt time.Time                 `json:"probed_at"`
+	Best     string                   `json:"best_prefix"`
+	Mode     string                   `json:"mode"`
+	ProbedAt time.Time                `json:"probed_at"`
 	Results  []acceleratorProbeResult `json:"results"`
 }
 
@@ -77,7 +79,6 @@ func resetAcceleratorManagerForTest(original []string) {
 	accelerators = &acceleratorManager{}
 	builtinGitHubAcceleratorPrefixes = original
 }
-
 
 func (a *App) acceleratorMode() string {
 	switch strings.ToLower(strings.TrimSpace(a.setting(settingAcceleratorMode, ""))) {
@@ -331,14 +332,14 @@ func (a *App) handleGitHubAccelerators(w http.ResponseWriter, r *http.Request) {
 	snapshot := a.refreshAcceleratorSnapshot(r.Context())
 	extras := a.acceleratorExtraPrefixes()
 	writeJSON(w, http.StatusOK, map[string]any{"success": true, "data": map[string]any{
-		"best_prefix":        snapshot.Best,
-		"mode":               snapshot.Mode,
-		"probed_at":          snapshot.ProbedAt,
-		"results":            snapshot.Results,
-		"manual_prefix":      a.manualAcceleratorPrefix(),
-		"extra_prefixes":     extras,
+		"best_prefix":         snapshot.Best,
+		"mode":                snapshot.Mode,
+		"probed_at":           snapshot.ProbedAt,
+		"results":             snapshot.Results,
+		"manual_prefix":       a.manualAcceleratorPrefix(),
+		"extra_prefixes":      extras,
 		"github_token_masked": maskGitHubToken(a.githubToken()),
-		"rate_limit":         lastGitHubRateLimit.snapshot(),
+		"rate_limit":          lastGitHubRateLimit.snapshot(),
 	}})
 }
 
@@ -419,11 +420,11 @@ func (o *githubRateLimitObservation) snapshot() map[string]any {
 		return nil
 	}
 	return map[string]any{
-		"limit":        o.limit,
-		"remaining":    o.remaining,
-		"reset_unix":   o.resetUnix,
-		"via":          o.via,
-		"observed_at":  o.observedAt,
+		"limit":       o.limit,
+		"remaining":   o.remaining,
+		"reset_unix":  o.resetUnix,
+		"via":         o.via,
+		"observed_at": o.observedAt,
 	}
 }
 

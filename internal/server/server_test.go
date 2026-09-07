@@ -365,16 +365,17 @@ func TestMihomoAlphaMetadataNormalizesToMeta(t *testing.T) {
 func TestComponentDownloadAssetFromReleaseRequiresDigest(t *testing.T) {
 	app := newTestApp(t)
 	digest := testSHA256Digest([]byte("dist archive"))
+	assetURL := "https://github.com/Zephyruso/zashboard/releases/download/v1.0.0/dist.zip"
 	release := githubRelease{Assets: []githubAsset{{
 		Name:               "dist.zip",
-		BrowserDownloadURL: "https://example.invalid/dist.zip",
+		BrowserDownloadURL: assetURL,
 		Digest:             digest,
 	}}}
 	asset, err := app.componentDownloadAssetFromRelease("zashboard", release)
 	if err != nil {
 		t.Fatalf("componentDownloadAssetFromRelease returned error: %v", err)
 	}
-	if asset.URL != "https://example.invalid/dist.zip" || asset.Digest != digest || asset.VerificationSource != componentVerificationSourceGitHubAssetDigest {
+	if asset.URL != assetURL || asset.Digest != digest || asset.VerificationSource != componentVerificationSourceGitHubAssetDigest {
 		t.Fatalf("unexpected asset metadata: %#v", asset)
 	}
 

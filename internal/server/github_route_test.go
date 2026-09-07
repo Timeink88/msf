@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -13,11 +14,12 @@ import (
 // mirrorFixture is an httptest accelerator that can answer probes (OK) and
 // API forwards (OK or a 403 rate-limit rejection) independently.
 type mirrorFixture struct {
-	server   *httptest.Server
-	apiHits  int
-	probeHits int
-	rejectAPI bool
-	delay    time.Duration
+	server     *httptest.Server
+	apiHits    int
+	probeHits  int
+	rejectAPI  bool
+	delay      time.Duration
+	lastAPIURI atomic.Value
 }
 
 func newMirrorFixture(t *testing.T, rejectAPI bool, delay time.Duration) *mirrorFixture {
@@ -27,6 +29,7 @@ func newMirrorFixture(t *testing.T, rejectAPI bool, delay time.Duration) *mirror
 		uri := r.RequestURI
 		if strings.Contains(uri, "api.github.com") {
 			m.apiHits++
+			m.lastAPIURI.Store(uri)
 			if m.rejectAPI {
 				w.Header().Set("Content-Type", "application/json")
 				w.WriteHeader(http.StatusForbidden)
@@ -54,30 +57,98 @@ func withTestAcceleratorPool(t *testing.T, prefixes ...string) {
 	t.Cleanup(func() { resetAcceleratorManagerForTest(original) })
 }
 
-func TestGitHubJSONRotatesMirrorOnRateLimit(t *testing.T) {
-	fast := newMirrorFixture(t, true, 0) // probe-fast, but rejects api with 403
-	slow := newMirrorFixture(t, false, 60*time.Millisecond)
-	withTestAcceleratorPool(t, fast.server.URL, slow.server.URL)
+func TestGitHubJSONNeverRoutesMetadataThroughMirror(t *testing.T) {
+	// A healthy mirror must never receive api.github.com metadata requests:
+	// the metadata carries both the asset URL and its digest, so a hostile
+	// mirror could forge a matching pair and defeat download verification.
+	// The mirrored URL would be mirror+"/https://api.github.com/..." — any
+	// hit on the fixture's api path means the regression is back.
+	mirror := newMirrorFixture(t, false, 0)
+	withTestAcceleratorPool(t, mirror.server.URL)
 	app := newTestApp(t)
-	// bestGitHubAccelerator never blocks; prime the cache synchronously so
-	// the first route is deterministically the (rejecting) fast mirror.
-	if snapshot := app.refreshAcceleratorSnapshot(context.Background()); snapshot.Best != fast.server.URL {
+	if snapshot := app.refreshAcceleratorSnapshot(context.Background()); snapshot.Best != mirror.server.URL {
 		t.Fatalf("probe winner = %q (results: %#v)", snapshot.Best, snapshot.Results)
 	}
-
+	// A URL whose host is not GitHub routes verbatim even with a live mirror:
+	// the received URI must be exactly what was requested — any accelerator
+	// prefix would show up here.
 	var release githubRelease
-	err := app.fetchGitHubJSONContext(context.Background(), "https://api.github.com/repos/scoltzero/msf/releases/latest", &release)
-	if err != nil {
-		t.Fatalf("rate-limit rotation should succeed via the runner-up: %v", err)
+	verbatim := mirror.server.URL + "/api.github.com/repos/x/y/releases/latest"
+	if err := app.fetchGitHubJSONContext(context.Background(), verbatim, &release); err != nil {
+		t.Fatalf("verbatim route failed: %v (apiHits=%d probeHits=%d)", err, mirror.apiHits, mirror.probeHits)
 	}
 	if release.TagName != "v9.9.9" {
-		t.Fatalf("runner-up payload not decoded: %#v", release)
+		t.Fatalf("payload not decoded: %#v", release)
 	}
-	if fast.apiHits == 0 {
-		t.Fatal("first route never hit the rejecting mirror")
+	// RequestURI 不含 scheme/host：等于请求路径即证明无镜像前缀拼接。
+	if got, _ := mirror.lastAPIURI.Load().(string); got != "/api.github.com/repos/x/y/releases/latest" {
+		t.Fatalf("metadata request URI = %q, want verbatim path (mirror prefixing is back)", got)
 	}
-	if slow.apiHits != 1 {
-		t.Fatalf("runner-up api hits = %d, want 1", slow.apiHits)
+}
+
+func TestGitHubJSONRetriesDirectLineAfterFailure(t *testing.T) {
+	var hits atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if hits.Add(1) == 1 {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusForbidden)
+			_, _ = w.Write([]byte(`{"message":"API rate limit exceeded for 1.2.3.4.","documentation_url":"https://docs.github.com"}`))
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"tag_name":"v9.9.9"}`))
+	}))
+	defer server.Close()
+
+	app := newTestApp(t)
+	var release githubRelease
+	if err := app.fetchGitHubJSONContext(context.Background(), server.URL+"/releases/latest", &release); err != nil {
+		t.Fatalf("direct retry should recover after a failed first line: %v", err)
+	}
+	if release.TagName != "v9.9.9" {
+		t.Fatalf("retry payload not decoded: %#v", release)
+	}
+	if hits.Load() != 2 {
+		t.Fatalf("total attempts = %d, want 2 (trusted line + direct retry)", hits.Load())
+	}
+}
+
+func TestGitHubReleaseAssetURLAcceptsOnlyGitHubDownloads(t *testing.T) {
+	ok := []string{
+		"https://github.com/MetaCubeX/mihomo/releases/latest/download/mihomo-linux-amd64.gz",
+		"https://github.com/vernesong/mihomo/releases/download/Prerelease-Alpha/mihomo-linux-arm64-v3.gz",
+	}
+	for _, raw := range ok {
+		if got, err := githubReleaseAssetURL(raw); err != nil || got != raw {
+			t.Fatalf("githubReleaseAssetURL(%q) = %q, %v; want verbatim acceptance", raw, got, err)
+		}
+	}
+	bad := map[string]string{
+		"":                               "empty",
+		"https://evil.example/mihomo.gz": "foreign host",
+		"http://github.com/owner/repo/releases/download/v1/a.gz": "plaintext http",
+		"https://github.com/owner/repo/archive/v1.tar.gz":        "not a release download",
+		"https://api.github.com/repos/o/r/releases/1":            "api endpoint, not asset",
+	}
+	for raw := range bad {
+		if got, err := githubReleaseAssetURL(raw); err == nil {
+			t.Fatalf("githubReleaseAssetURL(%q) accepted %q", raw, got)
+		}
+	}
+	// Forged metadata must not leak an executable route into self-update or
+	// component downloads: releaseAssetURL drops such assets entirely.
+	forged := githubRelease{
+		TagName: "v1.2.3",
+		Assets: []githubAsset{
+			{Name: "msf-linux-amd64.tar.gz", BrowserDownloadURL: "https://evil.example/msf-linux-amd64.tar.gz"},
+			{Name: "msf-linux-arm64.tar.gz", BrowserDownloadURL: "https://github.com/scoltzero/msf/releases/download/v1.2.3/msf-linux-arm64.tar.gz"},
+		},
+	}
+	if got := releaseAssetURL(forged, "linux-amd64", ".tar.gz"); got != "" {
+		t.Fatalf("forged asset URL accepted: %q", got)
+	}
+	if got := releaseAssetURL(forged, "linux-arm64", ".tar.gz"); got != "https://github.com/scoltzero/msf/releases/download/v1.2.3/msf-linux-arm64.tar.gz" {
+		t.Fatalf("legit asset not selected: %q", got)
 	}
 }
 

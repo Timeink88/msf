@@ -242,12 +242,16 @@ func (a *App) componentDownloadAssetFromRelease(component string, release github
 	if strings.TrimSpace(asset.BrowserDownloadURL) == "" {
 		return componentDownloadAsset{}, fmt.Errorf("%s release asset %q has no download URL", component, asset.Name)
 	}
+	assetURL, err := githubReleaseAssetURL(asset.BrowserDownloadURL)
+	if err != nil {
+		return componentDownloadAsset{}, fmt.Errorf("%s release asset %q has an untrusted download URL: %w", component, asset.Name, err)
+	}
 	digest, err := canonicalSHA256Digest(asset.Digest)
 	if err != nil {
 		return componentDownloadAsset{}, fmt.Errorf("%s release asset %q has no valid SHA-256 digest; use local upload or wait for a verified release: %w", component, asset.Name, err)
 	}
 	return componentDownloadAsset{
-		URL:                asset.BrowserDownloadURL,
+		URL:                assetURL,
 		Name:               asset.Name,
 		Digest:             digest,
 		VerificationSource: componentVerificationSourceGitHubAssetDigest,
@@ -348,12 +352,16 @@ func (a *App) componentDownloadAssetFromReleaseForCore(component, coreType strin
 	if strings.TrimSpace(asset.BrowserDownloadURL) == "" {
 		return componentDownloadAsset{}, fmt.Errorf("%s release asset %q has no download URL", component, asset.Name)
 	}
+	assetURL, err := githubReleaseAssetURL(asset.BrowserDownloadURL)
+	if err != nil {
+		return componentDownloadAsset{}, fmt.Errorf("%s release asset %q has an untrusted download URL: %w", component, asset.Name, err)
+	}
 	digest, err := canonicalSHA256Digest(asset.Digest)
 	if err != nil {
 		return componentDownloadAsset{}, fmt.Errorf("%s release asset %q has no valid SHA-256 digest; use local upload or wait for a verified release: %w", component, asset.Name, err)
 	}
 	return componentDownloadAsset{
-		URL:                asset.BrowserDownloadURL,
+		URL:                assetURL,
 		Name:               asset.Name,
 		Digest:             digest,
 		VerificationSource: componentVerificationSourceGitHubAssetDigest,

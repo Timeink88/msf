@@ -169,7 +169,7 @@ func newCapturingReleaseServer(t *testing.T, release githubRelease, blob []byte,
 	if err != nil {
 		t.Fatal(err)
 	}
-	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if captures != nil {
 			*captures = append(*captures, r.URL.Path)
 		}
@@ -184,6 +184,26 @@ func newCapturingReleaseServer(t *testing.T, release githubRelease, blob []byte,
 			http.NotFound(w, r)
 		}
 	}))
+	// Release 元数据如今只走可信通道（token/代理/直连），不再经镜像前缀，
+	// 用测试缝把元数据请求指到本 fixture；下载仍走镜像前缀进本服务器。
+	original := metadataFetchOverride
+	metadataFetchOverride = func(ctx context.Context, rawURL string, dst any) error {
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, server.URL+"/"+rawURL, nil)
+		if err != nil {
+			return err
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			return err
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode >= 300 {
+			return errors.New("fixture metadata http " + resp.Status)
+		}
+		return json.NewDecoder(resp.Body).Decode(dst)
+	}
+	t.Cleanup(func() { metadataFetchOverride = original })
+	return server
 }
 
 // metaReleaseForPlatform builds an official MetaCubeX latest release whose
@@ -375,7 +395,10 @@ func TestMihomoCoreSwitchDownloadURLUsesVerifiedAcceleratorPath(t *testing.T) {
 
 	t.Run("default picks fastest live accelerator", func(t *testing.T) {
 		original := builtinGitHubAcceleratorPrefixes
-		slow := newProbePool(t, func(w http.ResponseWriter, r *http.Request) { time.Sleep(300 * time.Millisecond); w.Write([]byte(body)) })
+		slow := newProbePool(t, func(w http.ResponseWriter, r *http.Request) {
+			time.Sleep(300 * time.Millisecond)
+			w.Write([]byte(body))
+		})
 		fast := newProbePool(t, func(w http.ResponseWriter, r *http.Request) { w.Write([]byte(body)) })
 		resetAcceleratorManagerForTest(original)
 		t.Cleanup(func() { resetAcceleratorManagerForTest(original) })

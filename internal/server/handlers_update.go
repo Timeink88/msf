@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -426,6 +427,15 @@ func (a *App) handleUpdateDownload(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{"success": false, "error": errText, "data": a.selfUpdateState()})
 		return
 	}
+	// The stored URL may predate today's metadata fetches; refuse anything
+	// that is not a GitHub release asset before downloading it.
+	validatedURL, urlErr := githubReleaseAssetURL(rawURL)
+	if urlErr != nil {
+		a.setSelfUpdateState("failed", "failed", 1, "更新包地址不可信", urlErr.Error(), "error", "更新包地址校验失败: "+urlErr.Error())
+		writeJSON(w, http.StatusOK, map[string]any{"success": false, "error": urlErr.Error(), "data": a.selfUpdateState()})
+		return
+	}
+	rawURL = validatedURL
 	dest := filepath.Join(a.DataDir, "data", "updates", filepath.Base(rawURL))
 	effectiveURL := a.rewriteDownloadURL(rawURL)
 	_ = a.ensureSelfUpdateInfoRow()
@@ -1457,44 +1467,29 @@ func (a *App) fetchGitHubJSON(rawURL string, dst any) error {
 }
 
 func (a *App) fetchGitHubJSONContext(ctx context.Context, rawURL string, dst any) error {
-	// A tokened request must never transit a public accelerator mirror: the
-	// Bearer credential would be handed to a third party.  With a token the
-	// 5000/h quota also makes mirror rotation unnecessary.
+	// Test seam: point the trusted metadata channel at a local fixture.
+	if metadataFetchOverride != nil {
+		return metadataFetchOverride(ctx, rawURL, dst)
+	}
+	// Release metadata is the root of trust for download verification: the
+	// asset URL and its SHA-256 digest arrive together in this document, so a
+	// hostile transport could forge both and the digest check would still
+	// pass.  Public accelerator mirrors are therefore NEVER used here — the
+	// only allowed routes are a tokened request (also never mirrored: the
+	// Bearer credential must not reach a third party) and api.github.com over
+	// the operator's trusted proxy or direct line.
 	if token := a.githubToken(); token != "" {
 		return friendlyGitHubAPIError(a.fetchGitHubJSONOnce(ctx, rawURL, false, token, dst, "token"))
 	}
-	first := a.githubDownloadRoute(rawURL)
-	firstPrefix := acceleratorPrefixOf(first.URL, rawURL)
-	via := "proxy"
-	if firstPrefix != "" {
-		via = "mirror"
-	}
-	err := a.fetchGitHubJSONOnce(ctx, first.URL, first.Direct, "", dst, via)
+	err := a.fetchGitHubJSONOnce(ctx, rawURL, false, "", dst, "proxy")
 	if err == nil {
 		return nil
 	}
-	if !isGitHubDownloadURL(rawURL) {
-		return friendlyGitHubAPIError(err)
-	}
-	// Rotate mirrors first — a different mirror egress IP carries its own
-	// anonymous 60/h quota, so switching actually helps on 403 — then fall
-	// back to the raw URL on the proxy/direct line.
-	if firstPrefix != "" {
-		markAcceleratorFailure(firstPrefix)
-		if next := a.nextAcceleratorPrefix(ctx, firstPrefix); next != "" {
-			if err2 := a.fetchGitHubJSONOnce(ctx, next+"/"+rawURL, true, "", dst, "mirror"); err2 == nil {
-				return nil
-			}
-		}
-		if err2 := a.fetchGitHubJSONOnce(ctx, rawURL, false, "", dst, "proxy"); err2 == nil {
-			return nil
-		}
-		return friendlyGitHubAPIError(err)
-	}
-	// The first attempt already went proxy/direct and failed: try the mirror
-	// line once before giving up.
-	if next := a.nextAcceleratorPrefix(ctx, ""); next != "" {
-		if err2 := a.fetchGitHubJSONOnce(ctx, next+"/"+rawURL, true, "", dst, "mirror"); err2 == nil {
+	// The trusted line itself can be the broken half (dead running core,
+	// stale proxy setting) while direct egress still works — retry once
+	// without any proxy before giving up.
+	if ctx.Err() == nil {
+		if err2 := a.fetchGitHubJSONOnce(ctx, rawURL, true, "", dst, "direct"); err2 == nil {
 			return nil
 		}
 	}
@@ -1542,6 +1537,39 @@ func friendlyGitHubAPIError(err error) error {
 	return err
 }
 
+// metadataFetchOverride lets tests point the trusted api.github.com metadata
+// channel at a local fixture server.  nil in production.
+var metadataFetchOverride func(ctx context.Context, rawURL string, dst any) error
+
+// githubReleaseAssetURL validates that a browser_download_url from release
+// metadata really points at a GitHub release asset.  The URL and its digest
+// travel in the same metadata document, so a compromised or forged feed could
+// otherwise aim the download (which runs as root on routers) at an arbitrary
+// host; only https://github.com release-asset URLs are accepted.  Loopback
+// hosts are exempted for local fixtures — serving there already implies
+// control of the machine itself.
+func githubReleaseAssetURL(raw string) (string, error) {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return "", fmt.Errorf("empty release asset URL")
+	}
+	u, err := url.Parse(trimmed)
+	if err != nil {
+		return "", fmt.Errorf("parse release asset URL: %w", err)
+	}
+	host := strings.ToLower(u.Hostname())
+	loopback := host == "localhost" || (net.ParseIP(host) != nil && net.ParseIP(host).IsLoopback())
+	if !loopback {
+		if u.Scheme != "https" || host != "github.com" {
+			return "", fmt.Errorf("release asset URL %q is not on https://github.com", trimmed)
+		}
+		if !strings.Contains(u.Path, "/releases/download/") && !strings.Contains(u.Path, "/releases/latest/download/") {
+			return "", fmt.Errorf("release asset URL %q is not a /releases/download/ URL", trimmed)
+		}
+	}
+	return trimmed, nil
+}
+
 func releaseAssetURL(release githubRelease, contains, suffix string) string {
 	contains = strings.ToLower(contains)
 	suffix = strings.ToLower(suffix)
@@ -1553,10 +1581,15 @@ func releaseAssetURL(release githubRelease, contains, suffix string) string {
 		if suffix != "" && !strings.HasSuffix(name, suffix) {
 			continue
 		}
-		return asset.BrowserDownloadURL
+		if assetURL, err := githubReleaseAssetURL(asset.BrowserDownloadURL); err == nil {
+			return assetURL
+		}
+		continue
 	}
 	if len(release.Assets) > 0 {
-		return release.Assets[0].BrowserDownloadURL
+		if assetURL, err := githubReleaseAssetURL(release.Assets[0].BrowserDownloadURL); err == nil {
+			return assetURL
+		}
 	}
 	return ""
 }
