@@ -30,7 +30,8 @@ export default defineConfig({
           }
           if (/[\\/]node_modules[\\/](echarts|zrender)[\\/]/.test(id)) return "echarts";
           if (/[\\/]node_modules[\\/](@codemirror|@lezer|@uiw|crelt)[\\/]/.test(id)) return "editor";
-          if (/[\\/]node_modules[\\/](three|ogl)[\\/]/.test(id)) return "graphics";
+          if (/[\\/]node_modules[\\/]three[\\/]/.test(id)) return "three";
+          if (/[\\/]node_modules[\\/]ogl[\\/]/.test(id)) return "ogl";
           if (/[\\/]node_modules[\\/](react-markdown|remark-gfm|remark-|rehype-|micromark|mdast-|hast-|unist-|vfile|unified|devlop|html-url-attributes|github-slugger)[^\\/]*[\\/]/.test(id)) {
             return "markdown";
           }

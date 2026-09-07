@@ -1,9 +1,9 @@
-import { lazy, Suspense } from "react";
+import { lazy, Suspense, useEffect, useState } from "react";
 import { Navigate, Route, Routes, useLocation, useSearchParams } from "react-router-dom";
 import { AlertCircle, Loader2, RefreshCw } from "lucide-react";
 import { useAuth } from "@/lib/auth";
 
-import { SceneBackdrop } from "@/components/liquid-glass/SceneBackdrop";
+const SceneBackdrop = lazy(() => import("@/components/liquid-glass/SceneBackdrop").then(m => ({ default: m.SceneBackdrop })));
 import { GlassSurface } from "@/components/liquid-glass/GlassSurface";
 
 // Route-level code splitting: the SPA used to ship as one ~3.1MB bundle that
@@ -21,8 +21,10 @@ const MosdnsConfigPage = lazy(() => import("@/app/mosdns/service-config/page"));
 const MosdnsLogsPage = lazy(() => import("@/app/mosdns/logs/page"));
 const ProxyPage = lazy(() => import("@/app/proxy/page"));
 const MihomoPage = lazy(() => import("@/app/mihomo/page"));
-const MihomoOverviewPage = lazy(() => import("@/app/mihomo/overview/page"));
-const MihomoProxiesPage = lazy(() => import("@/app/mihomo/proxies/page"));
+const loadMihomoOverview = () => import("@/app/mihomo/overview/page");
+const MihomoOverviewPage = lazy(loadMihomoOverview);
+const loadMihomoProxies = () => import("@/app/mihomo/proxies/page");
+const MihomoProxiesPage = lazy(loadMihomoProxies);
 const MihomoRulesPage = lazy(() => import("@/app/mihomo/rules/page"));
 const MihomoConnectionsPage = lazy(() => import("@/app/mihomo/connections/page"));
 const MihomoConfigPage = lazy(() => import("@/app/mihomo/config/page"));
@@ -38,7 +40,7 @@ const LiquidGlassLab = lazy(() => import("@/pages/LiquidGlassLab").then((m) => (
 function Splash() {
   return (
     <div className="gary-public-page grid min-h-screen place-items-center text-foreground">
-      <SceneBackdrop />
+      <div className="gary-scene bg-background" aria-hidden="true" />
       <GlassSurface material="thick" className="flex items-center gap-3 px-5 py-4">
         <Loader2 className="h-5 w-5 animate-spin text-primary" />
         <span className="text-sm text-muted-foreground">正在加载 MSF 管理平台</span>
@@ -50,7 +52,7 @@ function Splash() {
 function InitializationFailure({ message, onRetry }: { message?: string | null; onRetry: () => void }) {
   return (
     <div className="gary-public-page grid min-h-screen place-items-center px-4 text-foreground">
-      <SceneBackdrop />
+      <div className="gary-scene bg-background" aria-hidden="true" />
       <GlassSurface material="thick" className="w-full max-w-md p-6">
         <div className="flex items-start gap-3">
           <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-yellow-500/15 text-yellow-700 dark:text-yellow-300">
@@ -147,7 +149,34 @@ function protectedRoute(element: React.ReactNode) {
 }
 
 export function App() {
+  const { pathname } = useLocation();
+  const { user, initialized, loading } = useAuth();
+  const [sceneReady, setSceneReady] = useState(false);
+  useEffect(() => {
+    // Public route code loads alongside auth; protected API calls still wait.
+    const load = pathname === "/mihomo/proxies" ? loadMihomoProxies
+      : pathname === "/mihomo/overview" ? loadMihomoOverview : undefined;
+    void load?.().catch(() => undefined);
+  }, [pathname]);
+  useEffect(() => {
+    if (!user) { setSceneReady(false); return; }
+    if (loading || !initialized) return;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const reveal = () => { timer = setTimeout(() => setSceneReady(true), 150); };
+    const onReady = (event: Event) => {
+      if ((event as CustomEvent<string>).detail === pathname) reveal();
+    };
+    window.addEventListener("msf-page-ready", onReady);
+    if (!["/mihomo/proxies", "/mihomo/overview"].includes(pathname)) reveal();
+    return () => { window.removeEventListener("msf-page-ready", onReady); clearTimeout(timer); };
+  }, [pathname, user, initialized, loading]);
+  const publicPage = pathname === "/login" || pathname === "/setup";
   return (
+    <>
+      {!publicPage && sceneReady && user && initialized
+        ? <Suspense fallback={null}><SceneBackdrop /></Suspense>
+        : null}
+
     <Suspense fallback={<Splash />}>
       <Routes>
       <Route path="/setup" element={<SetupRoute />} />
@@ -210,5 +239,6 @@ export function App() {
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
     </Suspense>
+    </>
   );
 }

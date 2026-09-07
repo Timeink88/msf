@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { lazy, Suspense, useEffect, useMemo, useState, type ReactNode } from "react";
 import type { LucideIcon } from "lucide-react";
 import {
   Network,
@@ -29,7 +29,17 @@ import {
   type OverviewTrafficHistoryPoint,
 } from "@/components/mihomo/overview/OverviewWidgets";
 import { useMihomoTrafficStream } from "@/components/mihomo/overview/trafficStream";
-import { EarthGlobeCard } from "@/components/mihomo/overview/EarthGlobeCard";
+import { DeferredSection } from "@/components/DeferredSection";
+import { useDeferredWork, usePageReady } from "@/lib/page-readiness";
+const EarthGlobeCard = lazy(() => import("@/components/mihomo/overview/EarthGlobeCard").then(m => ({ default: m.EarthGlobeCard })));
+function DeferredProviders() {
+  const query = useApiPath<any>("/api/v1/mihomo/proxy-providers", [], 60000);
+  return <ProviderTrafficPanel payload={apiData(query.data, {})} />;
+}
+function DeferredRules() {
+  const query = useApiPath<any>("/api/v1/mihomo/rules?page_size=10000", [], 10000);
+  return <RuleHitChart payload={apiData(query.data, {})} />;
+}
 import { apiData, formatBytes, formatPercent } from "@/lib/api";
 import { useApiPath } from "@/lib/use-api";
 
@@ -377,12 +387,13 @@ export default function MihomoOverviewPage() {
   const [secretCopied, setSecretCopied] = useState(false);
   const trafficStream = useMihomoTrafficStream();
   const overview = useApiPath<any>("/api/v1/mihomo/overview", [], 1000);
-  const fullOverview = useApiPath<any>("/api/v1/mihomo/overview?full=1", [], 5000);
-  const configQuery = useApiPath<any>("/api/v1/mihomo/config", [], 0);
-  const networkQuery = useApiPath<any>("/api/v1/network/info", [], 0);
-  const connectionsQuery = useApiPath<any>("/api/v1/mihomo/connections", [], 2000);
-  const providersQuery = useApiPath<any>("/api/v1/mihomo/proxy-providers", [], 60000);
-  const rulesQuery = useApiPath<any>("/api/v1/mihomo/rules?page_size=10000", [], 10000);
+  usePageReady(!overview.loading);
+  const secondaryReady = useDeferredWork(overview.data !== null);
+  const [advancedOpen, setAdvancedOpen] = useState(false);
+  const fullOverview = useApiPath<any>("/api/v1/mihomo/overview?full=1", [], 5000, advancedOpen);
+  const configQuery = useApiPath<any>("/api/v1/mihomo/config", [], 0, secondaryReady);
+  const networkQuery = useApiPath<any>("/api/v1/network/info", [], 0, secondaryReady);
+  const connectionsQuery = useApiPath<any>("/api/v1/mihomo/connections", [], 2000, secondaryReady);
   const data = apiData<any>(overview.data, {});
   const fullData = apiData<any>(fullOverview.data, {});
   const configResponse = apiData<any>(configQuery.data, configQuery.data || {});
@@ -419,8 +430,6 @@ export default function MihomoOverviewPage() {
   const domesticExit = exitInfo(networkData.ipip ?? networkData.domestic ?? networkData.china_exit);
   const internationalExit = exitInfo(networkData.ipsb ?? networkData.international ?? networkData.global_exit);
   const connectionPayload = apiData<any>(connectionsQuery.data, {});
-  const providerPayload = apiData<any>(providersQuery.data, {});
-  const rulePayload = apiData<any>(rulesQuery.data, {});
   const connectionRows = useMemo(
     () => normalizeOverviewConnections(connectionPayload),
     [connectionPayload],
@@ -502,6 +511,7 @@ export default function MihomoOverviewPage() {
         />
 
         <OverviewStatCards
+          chartsReady={secondaryReady}
           downloadSpeed={downloadSpeedValue}
           uploadSpeed={uploadSpeedValue}
           connections={connectionCount}
@@ -512,16 +522,16 @@ export default function MihomoOverviewPage() {
           connectionHistory={connectionHistory}
         />
 
-        <GlassSurface material="thick" className="@container rounded-2xl p-3"><div className="grid items-stretch gap-3 @min-[768px]:grid-cols-2"><FaviconLatencyTester /><NetworkInfoPanel domestic={domesticExit} international={internationalExit} loading={networkQuery.loading} onRefresh={() => void networkQuery.reload()} /></div></GlassSurface>
+        <GlassSurface material="thick" className="@container rounded-2xl p-3"><div className="grid items-stretch gap-3 @min-[768px]:grid-cols-2">{secondaryReady ? <FaviconLatencyTester /> : null}<NetworkInfoPanel domestic={domesticExit} international={internationalExit} loading={networkQuery.loading} onRefresh={() => void networkQuery.reload()} /></div></GlassSurface>
 
-        <EarthGlobeCard connections={connectionRows} />
-        <ConnectionSankey connections={connectionRows} />
-        <ProviderTrafficPanel payload={providerPayload} />
-        <ConnectionHistoryPanel connections={connectionRows} />
-        <RuleHitChart payload={rulePayload} />
+        <DeferredSection height={480}>{secondaryReady ? <Suspense fallback={null}><EarthGlobeCard connections={connectionRows} /></Suspense> : null}</DeferredSection>
+        <DeferredSection><ConnectionSankey connections={connectionRows} /></DeferredSection>
+        <DeferredSection><DeferredProviders /></DeferredSection>
+        <DeferredSection><ConnectionHistoryPanel connections={connectionRows} /></DeferredSection>
+        <DeferredSection><DeferredRules /></DeferredSection>
 
         <Card>
-          <details>
+          <details onToggle={event => setAdvancedOpen(event.currentTarget.open)}>
           <summary className="flex cursor-pointer list-none flex-wrap items-center justify-between gap-3 p-4 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary/50">
             <div className="flex items-center gap-2">
               <HeaderIcon icon={Settings} tone="blue" />

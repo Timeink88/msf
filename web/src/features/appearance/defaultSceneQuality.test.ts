@@ -6,11 +6,20 @@ const settings = readFileSync(new URL("../../app/settings/SettingsClient.tsx", i
 const shell = readFileSync(new URL("../../components/AppShell.tsx", import.meta.url), "utf8");
 const login = readFileSync(new URL("../../app/login/page.tsx", import.meta.url), "utf8");
 const scene = readFileSync(new URL("../../components/liquid-glass/SceneBackdrop.tsx", import.meta.url), "utf8");
+const waves = readFileSync(new URL("../../components/react-bits/GradientWaves.tsx", import.meta.url), "utf8");
 const sceneStyles = readFileSync(new URL("../../styles/liquid-glass-scenes.css", import.meta.url), "utf8");
 const skin = readFileSync(new URL("../../lib/skin.ts", import.meta.url), "utf8");
 const amberSkin = readFileSync(new URL("../../styles/skin-amber.css", import.meta.url), "utf8");
 
 describe("appearance initialization contract", () => {
+  it("resizes the persistent waves without remounting on route or quality changes", () => {
+    expect(scene).not.toContain("key={");
+    expect(waves).toContain("const { maxDpr, maxRenderPixels } = sizingRef.current");
+    expect(waves).toContain("resizeRenderingRef.current = setSize");
+    expect(waves).toContain("resizeRenderingRef.current();");
+    expect(waves).toContain("}, [powerPreference]);");
+    expect(waves).not.toContain("}, [maxDpr, maxRenderPixels, powerPreference]);");
+  });
   it("defaults new browsers to dynamic balanced without overriding explicit quality", () => {
     expect(main).toContain('root.dataset.garyScene = savedScene === "static" || savedScene === "neutral" ? savedScene : "dynamic"');
     expect(main).toContain('savedQuality === "full" || savedQuality === "reduced" ? savedQuality : "balanced"');
@@ -33,7 +42,8 @@ describe("appearance initialization contract", () => {
 
   it("uses the complete v0.4.7.x scene on both the app shell and login", () => {
     expect(settings).toContain("主页与登录页恢复 v0.4.7.5 / v0.4.7.7 的静态背景特效");
-    expect(shell).toContain("<SceneBackdrop />");
+    expect(shell).not.toContain("<SceneBackdrop />");
+    expect(readFileSync(new URL("../../App.tsx", import.meta.url), "utf8")).toContain("<SceneBackdrop />");
     expect(login).toContain("<SceneBackdrop />");
     expect(scene).toContain('className="gary-scene__legacy-gradient"');
     expect(scene).toContain('className="gary-scene__legacy-silk"');

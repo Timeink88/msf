@@ -7,7 +7,6 @@ import { Sidebar } from "@/components/Sidebar";
 import { MobileNav } from "@/components/MobileNav";
 import { Fab } from "@/components/Fab";
 import { GlassFilterDefs } from "@/components/liquid-glass/GlassFilterDefs";
-import { SceneBackdrop } from "@/components/liquid-glass/SceneBackdrop";
 import { cn } from "@/lib/utils";
 import { DiagnosticsDialog } from "@/components/system/DiagnosticsDialog";
 import { StartupIssuesBanner } from "@/components/system/StartupIssuesBanner";
@@ -43,7 +42,6 @@ export function AppShell({
 
   return (
     <div className={cn("gary-app-shell", sidebarHidden && "gary-app-shell--sidebar-hidden")}>
-      <SceneBackdrop />
       <GlassFilterDefs />
       <a
         href="#main-content"

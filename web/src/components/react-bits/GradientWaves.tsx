@@ -83,6 +83,9 @@ export default function GradientWaves({
   const pointerRectRef = useRef<DOMRect | null>(null);
   const pointerTargetRef = useRef<[number, number]>([0.5, 0.5]);
   const startRenderingRef = useRef<() => void>(() => undefined);
+  const resizeRenderingRef = useRef<() => void>(() => undefined);
+  const sizingRef = useRef({ maxDpr, maxRenderPixels });
+  sizingRef.current = { maxDpr, maxRenderPixels };
   const propsRef = useRef({ speed, mouseInteraction, parallaxStrength, grain });
   propsRef.current = { speed, mouseInteraction, parallaxStrength, grain };
 
@@ -137,6 +140,7 @@ export default function GradientWaves({
     let previousHeight = 0;
     let previousDpr = 0;
     const setSize = () => {
+      const { maxDpr, maxRenderPixels } = sizingRef.current;
       const rect = container.getBoundingClientRect();
       pointerRectRef.current = rect;
       const cssWidth = Math.max(1, Math.floor(rect.width));
@@ -155,6 +159,7 @@ export default function GradientWaves({
       res[0] = gl.drawingBufferWidth;
       res[1] = gl.drawingBufferHeight;
     };
+    resizeRenderingRef.current = setSize;
     const ro = new ResizeObserver(setSize); ro.observe(container); setSize();
     const current=[0.5,0.5];
     let raf=0;
@@ -181,8 +186,15 @@ export default function GradientWaves({
     intersectionObserver?.observe(container);
     document.addEventListener("visibilitychange",onVisibilityChange);
     start();
-    return()=>{stop();ro.disconnect();intersectionObserver?.disconnect();document.removeEventListener("visibilitychange",onVisibilityChange);startRenderingRef.current=()=>undefined;programRef.current=null;pointerRectRef.current=null;canvas.remove();gl.getExtension("WEBGL_lose_context")?.loseContext();};
-  }, [maxDpr, maxRenderPixels, powerPreference]);
+    return()=>{stop();ro.disconnect();intersectionObserver?.disconnect();document.removeEventListener("visibilitychange",onVisibilityChange);startRenderingRef.current=()=>undefined;resizeRenderingRef.current=()=>undefined;programRef.current=null;pointerRectRef.current=null;canvas.remove();gl.getExtension("WEBGL_lose_context")?.loseContext();};
+  }, [powerPreference]);
+
+  useEffect(() => {
+    // Route/quality changes resize the existing context rather than compiling
+    // the same shader again. Preserve each route's original pixel budget.
+    resizeRenderingRef.current();
+    startRenderingRef.current();
+  }, [maxDpr, maxRenderPixels]);
 
   useEffect(() => {
     if (!mouseInteraction) return;

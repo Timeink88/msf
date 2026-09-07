@@ -87,7 +87,6 @@ export function SceneBackdrop() {
       ) : null}
       {visible && (
         <GradientWaves
-          key={`${state.dark ? "dark" : "light"}-${state.quality}-${state.performanceProfile}`}
           className="gary-scene__gradient-waves"
           horizonColor={palette.horizon}
           waveColor={palette.wave}
