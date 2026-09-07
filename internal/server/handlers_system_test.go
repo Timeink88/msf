@@ -238,8 +238,8 @@ func TestAppearanceSkinAndCustomCSSValidation(t *testing.T) {
 	}
 
 	valid := requestJSON(t, app, http.MethodPut, "/api/v1/settings/appearance", token, map[string]any{
-		"skin":        "classic",
-		"custom_css":  ":root { --primary: #f97316; }",
+		"skin":       "classic",
+		"custom_css": ":root { --primary: #f97316; }",
 	})
 	if valid.Code != http.StatusOK {
 		t.Fatalf("valid skin/custom_css update failed: status=%d body=%s", valid.Code, valid.Body.String())
@@ -537,5 +537,55 @@ func TestNetworkExitHTTPClientUsesConfiguredProxy(t *testing.T) {
 	}
 	if got, want := <-targets, "example.invalid"; got != want {
 		t.Fatalf("proxy received target %q, want %q", got, want)
+	}
+}
+
+func TestAppearanceCustomCSSRequiresAdmin(t *testing.T) {
+	app := newTestApp(t)
+	viewer := tokenForRole(t, app, "viewer")
+	admin := tokenForRole(t, app, "admin")
+
+	denied := requestJSON(t, app, http.MethodPut, "/api/v1/settings/appearance", viewer, map[string]any{
+		"custom_css": "body { display: none }",
+	})
+	if denied.Code != http.StatusForbidden {
+		t.Fatalf("viewer custom_css write = %d, want 403: %s", denied.Code, denied.Body.String())
+	}
+	after := requestJSON(t, app, http.MethodGet, "/api/v1/settings/appearance", viewer, nil)
+	if strings.Contains(after.Body.String(), "display: none") {
+		t.Fatal("rejected viewer custom_css write leaked into global appearance")
+	}
+
+	allowed := requestJSON(t, app, http.MethodPut, "/api/v1/settings/appearance", admin, map[string]any{
+		"custom_css": "body { --msf-test: 1 }",
+	})
+	if allowed.Code != http.StatusOK {
+		t.Fatalf("admin custom_css write failed: status=%d body=%s", allowed.Code, allowed.Body.String())
+	}
+
+	// 非 custom_css 的外观字段对非管理员保持原行为（全局外观可写）。
+	themeOnly := requestJSON(t, app, http.MethodPut, "/api/v1/settings/appearance", viewer, map[string]any{"theme": "light"})
+	if themeOnly.Code != http.StatusOK {
+		t.Fatalf("viewer theme write = %d, want 200: %s", themeOnly.Code, themeOnly.Body.String())
+	}
+}
+
+func TestSettingsGetMasksCredentials(t *testing.T) {
+	app := newTestApp(t)
+	app.setSetting(settingGitHubToken, "ghp_token1234567890abcdef")
+	app.setSetting(mihomoControllerSecretSettingKey, "0123456789abcdef0123456789abcdef01234567")
+	admin := tokenForRole(t, app, "admin")
+	res := requestJSON(t, app, http.MethodGet, "/api/v1/settings", admin, nil)
+	if res.Code != http.StatusOK {
+		t.Fatalf("settings GET failed: status=%d body=%s", res.Code, res.Body.String())
+	}
+	body := res.Body.String()
+	for _, raw := range []string{"ghp_token1234567890abcdef", "0123456789abcdef0123456789abcdef01234567"} {
+		if strings.Contains(body, raw) {
+			t.Fatalf("credential leaked through generic settings GET: %s", raw)
+		}
+	}
+	if !strings.Contains(body, "ghp_******cdef") {
+		t.Fatalf("masked github token missing from response: %s", body)
 	}
 }

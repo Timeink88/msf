@@ -709,6 +709,18 @@ func combinedOutputWithTimeout(ctx context.Context, timeout time.Duration, name 
 	return out, err
 }
 
+// settingsResponseRedactedKeys 通用设置响应里绝不能原样回显的凭据：
+// github_token 与 mihomo_controller_secret 都是可直接调用对应服务端的
+// Bearer 凭据。前端对通用 settings 只做按键读写（不整表回存），掩码值
+// 不会被写回；写入仍走各自专用端点。
+func settingsResponseValue(key, value string) string {
+	switch key {
+	case settingGitHubToken, mihomoControllerSecretSettingKey:
+		return maskGitHubToken(value)
+	}
+	return value
+}
+
 func (a *App) handleSettingsGet(w http.ResponseWriter, r *http.Request) {
 	rows, err := a.DB.Query(`select key,value from settings`)
 	if err != nil {
@@ -720,7 +732,7 @@ func (a *App) handleSettingsGet(w http.ResponseWriter, r *http.Request) {
 	for rows.Next() {
 		var k, v string
 		_ = rows.Scan(&k, &v)
-		settings[k] = v
+		settings[k] = settingsResponseValue(k, v)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"success": true, "settings": settings, "data": settings})
 }
@@ -814,6 +826,15 @@ func (a *App) handleSettingsAppearancePut(w http.ResponseWriter, r *http.Request
 	if err := decodeJSON(r, &req); err != nil {
 		writeError(w, http.StatusBadRequest, "bad_request", err.Error())
 		return
+	}
+	// 外观设置是全局的：主题/皮肤改动所有用户可见尚可接受，但自定义 CSS
+	// 能改写任何人（含管理员）看到的界面元素，写权限必须收敛到管理员。
+	// 路由层对非 guest 角色放行该端点，这里按字段再收紧。
+	if _, ok := req["custom_css"]; ok {
+		if u := currentUser(r); u == nil || !strings.EqualFold(strings.TrimSpace(u.Role), "admin") {
+			writeError(w, http.StatusForbidden, "forbidden", "custom_css 是全局设置，仅管理员可修改")
+			return
+		}
 	}
 	opacity, hasOpacity, err := validateContentPlateOpacityPayload(req)
 	if err != nil {

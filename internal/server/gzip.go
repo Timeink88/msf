@@ -7,6 +7,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 )
@@ -38,14 +39,55 @@ func compressibleContentType(contentType string) bool {
 	return false
 }
 
+// clientAcceptsGzip 解析 Accept-Encoding 并尊重 q 值：gzip;q=0（或
+// *;q=0 且未显式列出 gzip）的客户端拿到压缩体会算协商失败；共享缓存
+// 依赖 Vary: Accept-Encoding 区分两种表示。
 func clientAcceptsGzip(r *http.Request) bool {
 	encoding := r.Header.Get("Accept-Encoding")
+	if encoding == "" {
+		return false
+	}
+	gzipSeen := false
+	gzipOK := false
+	starSeen := false
+	starOK := false
+	starZero := false
 	for _, part := range strings.Split(encoding, ",") {
-		if strings.EqualFold(strings.TrimSpace(strings.SplitN(part, ";", 2)[0]), "gzip") {
-			return true
+		fields := strings.Split(part, ";")
+		name := strings.ToLower(strings.TrimSpace(fields[0]))
+		if name != "gzip" && name != "*" {
+			continue
+		}
+		q := 1.0
+		for _, param := range fields[1:] {
+			param = strings.TrimSpace(param)
+			if len(param) < 2 || !strings.EqualFold(param[:2], "q=") {
+				continue
+			}
+			if parsed, err := strconv.ParseFloat(param[2:], 64); err == nil {
+				q = parsed
+			}
+		}
+		switch name {
+		case "gzip":
+			gzipSeen = true
+			gzipOK = q > 0
+		case "*":
+			starSeen = true
+			if q <= 0 {
+				starZero = true
+			} else {
+				starOK = true
+			}
 		}
 	}
-	return false
+	if gzipSeen {
+		return gzipOK
+	}
+	if starZero {
+		return false
+	}
+	return starSeen && starOK
 }
 
 type gzipResponseWriter struct {
@@ -107,9 +149,12 @@ func (g *gzipResponseWriter) finish() {
 
 // withResponseCompression wraps next for clients that advertise gzip support.
 // It sits at the very outside of the middleware chain so every inner layer
-// (logging recorder, auth, handlers) keeps working unchanged.
+// (logging recorder, auth, handlers) keeps working unchanged.  Vary is set on
+// every pass — even uncompressed responses vary by Accept-Encoding, and a
+// shared cache without that key would serve the wrong representation.
 func withResponseCompression(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Add("Vary", "Accept-Encoding")
 		if !clientAcceptsGzip(r) || r.Method == http.MethodHead {
 			next.ServeHTTP(w, r)
 			return
