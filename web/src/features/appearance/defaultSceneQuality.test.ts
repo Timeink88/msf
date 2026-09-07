@@ -14,9 +14,9 @@ const amberSkin = readFileSync(new URL("../../styles/skin-amber.css", import.met
 describe("appearance initialization contract", () => {
   it("resizes the persistent waves without remounting on route or quality changes", () => {
     expect(scene).not.toContain("key={");
-    expect(waves).toContain("const { maxDpr, maxRenderPixels } = sizingRef.current");
-    expect(waves).toContain("resizeRenderingRef.current = setSize");
-    expect(waves).toContain("resizeRenderingRef.current();");
+    expect(waves).toContain("const { options, maxDpr, maxRenderPixels } = current.current");
+    expect(waves).toContain("syncRef.current = sync");
+    expect(waves).toContain("syncRef.current();");
     expect(waves).toContain("}, [powerPreference]);");
     expect(waves).not.toContain("}, [maxDpr, maxRenderPixels, powerPreference]);");
   });

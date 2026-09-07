@@ -36,6 +36,8 @@
 
 #### 性能优化（速赢包）
 
+- 波浪背景优先使用 OffscreenCanvas Worker，把 WebGL 初始化与逐帧渲染移出 UI 主线程；全屏三角形不再触发通用渲染器的无关扩展查询。保留原着色器、皮肤色板、画质预算、隐藏暂停和静态模式；不支持或启动失败时回退主线程渲染，无 WebGL 时保留静态底色。
+
 - 优化 Mihomo 首次加载：分离波浪与地球依赖、并行预载目标路由，首屏数据提交后再启动持久背景。代理节点先于辅助接口显示；概览图表延后初始化，地球/规则/订阅随视口加载，完整运行快照仅在展开高级信息后获取。
 
 - 静态资源缓存分级：带哈希的构建产物一年 immutable，固定名资源一小时，index.html 保持即时刷新——面板二次打开不再全量重下。
@@ -135,6 +137,8 @@
 - GitHub Release metadata always comes from the official TLS endpoint. Asset downloads use only an administrator-supplied proxy or accelerator prefix; MSF no longer bundles, automatically probes, ranks, or switches public mirrors. The panel can explicitly test only the configured accelerator without changing routing. Personal tokens remain encrypted at rest, and assets still require a trusted SHA-256 digest.
 
 #### Performance quick wins
+
+- Prefer an OffscreenCanvas worker for wave initialization and rendering, keeping GPU setup off the UI thread and avoiding unrelated renderer extension discovery. Preserve the original shader, skin palette, pixel budgets, visibility pause and static mode; fall back to main-thread rendering when unsupported or startup fails, and retain the static surface without WebGL.
 
 - Improve Mihomo cold loads: separate wave and globe dependencies, preload target route code alongside authentication, and start the persistent background after primary content. Publish proxy nodes before auxiliary requests; defer charts, load globe/rules/providers near the viewport, and fetch full runtime snapshots only when advanced details are opened.
 
